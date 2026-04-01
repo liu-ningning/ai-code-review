@@ -107,7 +107,8 @@ export class ReviewPipeline {
     const reviewStartedAt = new Date().toISOString();
 
     try {
-      // 1. 获取评审目标元数据
+      // 1. 获取评审目标元数据。
+      // 入口层传进来的只是最小 target，这里会补齐标题、描述、展示 ID、分支信息等。
       prMetadata = await this.scmProvider.getReviewMetadata(target);
       const pr = prMetadata;
       await this.emitProgress('metadata_loaded', `Loaded review metadata for ${pr.displayId}`, {
@@ -118,13 +119,14 @@ export class ReviewPipeline {
       });
       reviewStatus = await this.createReviewStatus(pr, reviewStartedAt);
 
-      // 2. 获取 Diff
+      // 2. 获取原始 diff。
+      // 这一步拿到的是 SCM 侧完整变更集合，后续还会做噪音过滤与分段。
       const rawDiffs = await this.scmProvider.getDiff(target, pr);
       await this.emitProgress('diff_fetched', `Fetched raw diff for ${pr.displayId}`, {
         rawFileCount: rawDiffs.length,
       });
       
-      // 3. 过滤无意义 Diff
+      // 3. 过滤低价值 diff，并为每个保留文件推导 review 策略。
       const targetDiffs = DiffFilter.filter(rawDiffs);
       const fileStrategies = new Map<string, ReviewFileStrategy>(
         targetDiffs.map((diff) => [diff.path, resolveReviewFileStrategy(diff.path, diff)])
@@ -135,6 +137,7 @@ export class ReviewPipeline {
       });
 
       if (targetDiffs.length === 0) {
+        // 如果过滤后没有可评审文件，显式返回 neutral，而不是把它当成错误。
         const completedAt = new Date().toISOString();
         await this.updateReviewStatus(pr, reviewStatus, {
           detailsUrl: pr.htmlUrl,
@@ -169,7 +172,8 @@ export class ReviewPipeline {
         };
       }
       
-      // 4. 检测规模并决定策略
+      // 4. 评估整体规模与风险分。
+      // 结果会影响进度文案、状态摘要，以及后续 review 的保守程度。
       const { scale, riskScore } = this.scaleDetector.detect(targetDiffs);
       logger.info(`Detected review scale: ${scale}, Risk Score: ${riskScore} (${targetDiffs.length} files to review)`);
       await this.emitProgress('scale_detected', `Detected review scale ${scale}`, {
@@ -178,6 +182,10 @@ export class ReviewPipeline {
         reviewableFileCount: targetDiffs.length,
       });
 
+      // 5. 准备 checkout，并并行完成前置分析：
+      // - 统一静态分析入口
+      // - 多文件导出契约分析
+      // - 改动簇摘要生成
       repositoryCheckout = await this.checkoutManager.checkout(owner, repo, pr.sourceBranch, pr.headSha);
       await this.emitProgress('checkout_prepared', `Prepared repository checkout for ${owner}/${repo}`, {
         checkoutDir: repositoryCheckout.rootDir,
@@ -238,6 +246,8 @@ export class ReviewPipeline {
       let nextFileIndex = 0;
       let completedFiles = 0;
 
+      // 6. 在文件级并发下执行 review。
+      // 每个 worker 会拿一个文件，进入 reviewFile -> RAG -> Prompt -> LLM 的链路。
       const reviewWorker = async () => {
         while (true) {
           const currentIndex = nextFileIndex++;
@@ -371,6 +381,9 @@ export class ReviewPipeline {
 
   /**
    * 对单个文件执行上下文提取、提示词构建和 LLM 评审，并合并静态发现。
+   *
+   * 单文件内部也可能继续拆成多个 review segment，
+   * 以降低多 hunk 大文件在一次 prompt 里的上下文噪音。
    */
   private async reviewFile(
     owner: string,
@@ -394,10 +407,11 @@ export class ReviewPipeline {
     const diffImpactSignals = DiffImpactAnalyzer.analyze(diff);
     const fileSignals = [...staticSignals, ...diffImpactSignals];
     const collectedComments: ReviewComment[] = [];
-      let lastSegmentError: unknown = null;
+    let lastSegmentError: unknown = null;
 
     for (let segmentIndex = 0; segmentIndex < reviewSegments.length; segmentIndex += 1) {
       const segmentDiff = reviewSegments[segmentIndex];
+      // 仅把和当前 segment 相关的信号带进 prompt，避免无关 hunk 互相污染。
       const segmentSignals = this.filterSignalsForSegment(fileSignals, segmentDiff, segmentIndex, reviewSegments.length);
       const context: CodeContext = await ragEngine.extract(
         owner,
@@ -436,6 +450,7 @@ export class ReviewPipeline {
       });
 
       try {
+        // LLM 调用还会被一个更细粒度的并发闸门限制，避免把上游 provider 压爆。
         const comments = await llmConcurrencyGate.run(() => this.llmProvider.generateReview(prompt, diff.path));
         collectedComments.push(...comments.map((comment) => ({
           ...comment,
@@ -448,6 +463,7 @@ export class ReviewPipeline {
     }
 
     if (collectedComments.length === 0) {
+      // 如果模型没产出任何评论，但静态规则已有明确发现，则至少返回静态发现。
       if (staticFindings.length > 0) {
         logger.warn(`LLM review failed for ${diff.path}, returning static findings only.`);
         return staticFindings.map((finding) => ({
@@ -582,6 +598,7 @@ export class ReviewPipeline {
     message: string,
     data?: Record<string, unknown>
   ): Promise<void> {
+    // 不需要流式进度时直接短路，避免主链承担无意义开销。
     if (!this.options.onProgress) {
       return;
     }
@@ -607,6 +624,9 @@ export class ReviewPipeline {
 
   /**
    * 把多来源静态分析结果聚合成一份统一结果，避免后续阶段感知来源差异。
+   *
+   * 这样 reviewFile 只需要读取“最终每个文件有哪些 findings/signals”，
+   * 不用关心它们来自基础静态分析还是跨文件契约分析。
    */
   private mergeStaticAnalysisResults(...results: StaticAnalysisResult[]): StaticAnalysisResult {
     const findingsByPath = new Map<string, StaticAnalysisResult['findingsByPath'] extends Map<string, infer T> ? T : never>();
@@ -708,6 +728,8 @@ export class ReviewPipeline {
 
   /**
    * 根据文件数、错误数和评论数决定最终 review 结论。
+   *
+   * 这里的结论是流程层面的最终判断，后续还会被映射成 HTTP 状态码和 SCM check run 结论。
    */
   private resolveConclusion(fileCount: number, errorCount: number, commentCount: number): ReviewCheckConclusion {
     if (errorCount > 0) {

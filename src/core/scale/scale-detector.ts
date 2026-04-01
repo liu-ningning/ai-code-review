@@ -26,6 +26,7 @@ export class ScaleDetector {
     maxLinesForMedium: 500,
   };
 
+  // 少量“命中即提高风险分”的路径，不追求穷尽所有场景。
   private static readonly HIGH_RISK_PATHS = [
     /src\/auth\//,
     /src\/security\//,
@@ -35,10 +36,16 @@ export class ScaleDetector {
 
   /**
    * 根据文件数、变更行数和高风险路径命中情况计算 review 规模与风险分。
+   *
+   * 这个评估不是简单按行数分桶，还会叠加：
+   * - 删除型改动带来的回归风险
+   * - diff-impact 的启发式高风险信号
+   * - 文件策略类别本身的业务敏感度
+   * - 特殊高风险目录命中
    */
   detect(diffs: FileDiff[]): { scale: ReviewScale; riskScore: number } {
     let riskScore = 0;
-    
+
     const totalLines = diffs.reduce((acc, diff) => {
       const isHighRisk = ScaleDetector.HIGH_RISK_PATHS.some(pattern => pattern.test(diff.path));
       const { added, removed } = collectChangedLines(diff);
@@ -58,6 +65,7 @@ export class ScaleDetector {
         riskScore += 6;
       }
 
+      // 某些文件类型天然更值得收紧 review 等级。
       switch (strategy.kind) {
         case 'backend_service':
         case 'ci_pipeline':
@@ -79,6 +87,7 @@ export class ScaleDetector {
     const fileCount = diffs.length;
     let scale: ReviewScale = 'LARGE';
 
+    // 先按体量给出基础分档。
     if (totalLines <= this.config.maxLinesForSmall && fileCount <= 5) {
       scale = 'SMALL';
     } else if (totalLines <= this.config.maxLinesForMedium && fileCount <= 20) {

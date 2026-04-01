@@ -64,6 +64,9 @@ export class OpenAIProvider {
 
   /**
    * 发送提示词给模型，并把响应解析成当前文件的 review 评论。
+   *
+   * provider 自己负责处理瞬时失败重试，因此 pipeline 层只需要把它当作
+   * “单文件生成评论”的原子操作调用，不需要再额外包一层重试。
    */
   async generateReview(prompt: string, filePath: string): Promise<ReviewComment[]> {
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
@@ -136,6 +139,9 @@ export class OpenAIProvider {
 
   /**
    * 校验模型返回的 JSON 结构，并规范化为内部评论对象。
+   *
+   * 这里除了做 schema 校验，还会顺手去重和统一正文格式，避免模型重复输出
+   * 相同行号/相同内容的评论，或输出难以在 SCM 页面稳定渲染的自由文本代码示例。
    */
   private parseResponse(content: string, filePath: string, usageLine: string | null): ReviewComment[] {
     try {
@@ -219,6 +225,9 @@ export class OpenAIProvider {
 
   /**
    * 基于 retry-after 或指数退避计算下一次重试等待时长。
+   *
+   * 如果上游显式给了 `retry-after`，优先尊重服务端节流窗口；否则退回
+   * 到本地的指数退避策略，减少短时间内连续打满配额。
    */
   private getRetryDelayMs(error: unknown, attempt: number): number {
     const retryAfterMs = this.getRetryAfterMs(error);
@@ -229,6 +238,9 @@ export class OpenAIProvider {
     return this.retryBaseDelayMs * (2 ** attempt);
   }
 
+  /**
+   * 尝试从 SDK 错误对象里解析 `retry-after`，兼容浏览器 Headers 和普通对象。
+   */
   private getRetryAfterMs(error: unknown): number | null {
     if (!error || typeof error !== 'object') {
       return null;
@@ -271,6 +283,9 @@ export class OpenAIProvider {
     return null;
   }
 
+  /**
+   * 轻量 sleep 封装，只用于重试退避，避免把 `setTimeout` 细节散落在主流程里。
+   */
   private async sleep(ms: number): Promise<void> {
     if (ms <= 0) {
       return;
@@ -283,6 +298,14 @@ export class OpenAIProvider {
 
   /**
    * 从模型文本响应中尽可能提取出一段可解析的 JSON payload。
+   *
+   * 实际模型输出并不总是严格只返回 JSON：
+   * 1. 有时会包在 fenced code block 里
+   * 2. 有时会在 JSON 前后夹带解释性文本
+   * 3. 有时会错误地连续输出多个顶层对象
+   *
+   * 这里按“最严格到最宽松”的顺序逐级兜底，尽量把可恢复的输出救回来，
+   * 但最终仍把结构合法性交给 zod schema 校验。
    */
   private parseJsonPayload(content: string): unknown {
     const normalized = content.trim();
@@ -338,6 +361,9 @@ export class OpenAIProvider {
 
   /**
    * 尝试把多个顶层对象拼成的响应解析成对象数组。
+   *
+   * 这是兜底分支，主要应对模型输出 `{...}{...}` 这类并非标准 JSON、
+   * 但每个对象本身都合法的情况。
    */
   private tryParseObjectSequence(content: string): unknown[] | null {
     const objectSlices = this.extractTopLevelObjects(content);
@@ -360,6 +386,9 @@ export class OpenAIProvider {
 
   /**
    * 从文本中扫描并提取所有顶层 JSON 对象片段。
+   *
+   * 这里需要显式处理字符串和转义状态，否则正文里的花括号会被误识别成
+   * 结构边界，导致对象切片不完整。
    */
   private extractTopLevelObjects(content: string): string[] {
     const slices: string[] = [];
@@ -416,6 +445,9 @@ export class OpenAIProvider {
 
   /**
    * 把 token 使用情况格式化成可附加到评论正文前的说明行。
+   *
+   * 这不是业务必需字段，但在排查成本、prompt 膨胀和模型行为异常时很有用，
+   * 因此以纯文本方式附着到评论上，方便直接在 SCM 页面看到。
    */
   private buildUsageLine(
     usage?: {
@@ -452,6 +484,9 @@ export class OpenAIProvider {
 
   /**
    * 统一规范评论正文中的“代码示例”区域，避免有时是代码块、有时是普通文本。
+   *
+   * provider 在最终出口做这层清洗，可以保证不论 prompt 如何变化，
+   * 发到 GitHub/GitLab 的评论都尽量保持稳定的渲染效果。
    */
   private normalizeCommentBody(body: string, filePath: string): string {
     const normalized = body.replace(/\r\n/g, '\n').trim();
@@ -460,6 +495,8 @@ export class OpenAIProvider {
 
   /**
    * 把“代码示例”统一转成 fenced code block，GitLab 渲染会更稳定。
+   *
+   * 这里约定只处理明确以“代码示例”收尾的段落，避免误伤正文里的普通解释文本。
    */
   private normalizeCodeExampleSection(body: string, filePath: string): string {
     const markerMatch = body.match(/代码示例[:：]\s*([\s\S]*)$/);
@@ -528,6 +565,9 @@ export class OpenAIProvider {
 
   /**
    * 根据当前 review 文件路径推断最适合的代码块语言。
+   *
+   * 这是一个偏启发式的映射，目标不是绝对准确，而是尽量让 SCM 页面上的
+   * 代码高亮更接近真实语言，提升 review 可读性。
    */
   private inferCodeFenceLanguage(filePath: string, content: string): string {
     if (/^\s*(RUN|CMD|ENTRYPOINT|FROM|COPY|ADD)\b/m.test(content)) {

@@ -52,12 +52,14 @@ const RESOLUTION_EXTENSIONS = [
  * 基于 tsconfig/jsconfig 路径映射解析本地 import，辅助静态分析追踪依赖边。
  */
 export class LocalImportResolver {
+  // 按 cacheScope 缓存路径映射结果，避免反复读取 tsconfig/jsconfig。
   private static readonly aliasMappingsCache = new LRUCache<string, AliasMapping[]>({
     max: 64,
     ttl: 10 * 60 * 1000,
   });
 
   private readonly aliasMappings: AliasMapping[] = [];
+  // 防止 extends 链路里的配置文件被重复或递归加载。
   private readonly loadedConfigs = new Set<string>();
 
   constructor(
@@ -79,6 +81,7 @@ export class LocalImportResolver {
     }
 
     for (const configPath of COMMON_TSCONFIG_FILES) {
+      // 只扫描少量高概率配置文件，控制初始化成本。
       if (existsSync(path.join(this.rootDir, configPath))) {
         await this.loadConfig(configPath);
       }
@@ -97,12 +100,14 @@ export class LocalImportResolver {
    * 把 import specifier 解析成仓库内的真实文件路径。
    */
   resolveImport(fromRepoPath: string, specifier: string): string | undefined {
+    // 相对路径 import 直接从当前文件目录出发解析。
     if (specifier.startsWith('.')) {
       return this.resolveCandidateBase(
         path.posix.normalize(path.posix.join(path.posix.dirname(fromRepoPath), specifier))
       );
     }
 
+    // alias import 逆序匹配，后加载的配置拥有更高优先级。
     for (let index = this.aliasMappings.length - 1; index >= 0; index -= 1) {
       const mapping = this.aliasMappings[index];
       const wildcardValue = this.extractWildcard(mapping, specifier);
@@ -150,6 +155,7 @@ export class LocalImportResolver {
     }
 
     const extendsEntry = typeof configObject.extends === 'string' ? configObject.extends.trim() : '';
+    // 只展开仓库内的相对 extends；外部 preset 不在这里继续跟进。
     if (extendsEntry && (extendsEntry.startsWith('.') || extendsEntry.startsWith('/'))) {
       const extendedConfigPath = normalizeRepoPath(
         path.posix.join(
@@ -210,6 +216,8 @@ export class LocalImportResolver {
 
   /**
    * 按约定扩展名尝试解析一个候选基础路径对应的真实脚本文件。
+   *
+   * 顺序基本模拟常见 Node/TS 文件解析：裸路径、具体扩展名、目录 index。
    */
   private resolveCandidateBase(basePath: string): string | undefined {
     for (const extension of RESOLUTION_EXTENSIONS) {

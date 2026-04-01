@@ -26,6 +26,8 @@ export function getTouchedNewLineEntries(diff: FileDiff): TouchedDiffLine[] {
   const touchedLines: TouchedDiffLine[] = [];
 
   for (const chunk of diff.chunks) {
+    // unified diff 的 hunk 内容依旧是文本，因此这里按行重新扫描前缀：
+    // `+` 表示新增、`-` 表示删除、空格表示上下文。
     const chunkLines = chunk.content.replace(/\r\n/g, '\n').split('\n');
     let nextNewLine = chunk.newRange.start;
 
@@ -128,6 +130,8 @@ export function getChangedNewLineAnchors(diff: FileDiff): number[] {
 
 /**
  * 判断某一行是否属于当前 diff 的新增行。
+ *
+ * 适合做单点校验，例如“模型给出的评论行是否真的在新增侧”。
  */
 export function isTouchedNewLine(diff: FileDiff, line: number): boolean {
   return getTouchedNewLines(diff).has(line);
@@ -135,6 +139,8 @@ export function isTouchedNewLine(diff: FileDiff, line: number): boolean {
 
 /**
  * 判断给定行号区间内是否至少包含一行当前 diff 的新增内容。
+ *
+ * 常用于判断一个函数、类或语义作用域是否真的被本次改动命中。
  */
 export function hasTouchedNewLineInRange(diff: FileDiff, startLine: number, endLine: number): boolean {
   const touchedLines = getTouchedNewLines(diff);
@@ -167,6 +173,8 @@ export function splitDiffIntoReviewSegments(
   let currentSegment: typeof diff.chunks = [diff.chunks[0]];
 
   for (const chunk of diff.chunks.slice(1)) {
+    // 两个 hunk 在新文件侧距离足够近时合并评审；
+    // 距离太远则拆段，避免一次 prompt 混入过多无关修改。
     const previousChunk = currentSegment[currentSegment.length - 1];
     const previousNewEnd = previousChunk.newRange.start + Math.max(previousChunk.newRange.lines, 1) - 1;
     const currentGap = chunk.newRange.start - previousNewEnd;
@@ -194,6 +202,8 @@ export function splitDiffIntoReviewSegments(
 
 /**
  * 判断当前 diff 是否只包含空白字符层面的调整。
+ *
+ * 只有新增/删除行数一一对应时才进一步比较，避免把真实删改误判成格式调整。
  */
 export function isWhitespaceOnlyDiff(diff: FileDiff): boolean {
   const { added, removed } = collectChangedLines(diff);
@@ -206,6 +216,8 @@ export function isWhitespaceOnlyDiff(diff: FileDiff): boolean {
 
 /**
  * 统计当前 diff 的新增与删除文本行，用于噪音过滤和影响分析。
+ *
+ * 这是多个启发式分析器的基础输入：它忽略行号，只保留“改了什么文本”。
  */
 export function collectChangedLines(diff: FileDiff): CollectedDiffLines {
   const added: string[] = [];

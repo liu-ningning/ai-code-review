@@ -103,6 +103,8 @@ const MAX_SEARCH_RESULTS = 200;
 export class GitHubProvider implements ISCMProvider {
   private readonly client: AxiosInstance;
   private readonly webBaseUrl: string;
+  // 评论清理阶段会频繁用到“当前 token 对应的是谁”，这里缓存一次即可，
+  // 避免每轮同步评论都重复打 `/user` 接口。
   private currentUserPromise: Promise<GitHubCurrentUserResponse | null> | null = null;
 
   constructor(options: GitHubProviderOptions) {
@@ -153,6 +155,8 @@ export class GitHubProvider implements ISCMProvider {
       failedCount: 0,
     };
 
+    // GitHub 没有“整批替换 AI 评论”的原子接口，因此这里采用
+    // “先清旧评论，再发新评论”的协调策略，尽量让同一轮 review 的输出保持一致。
     if (target.kind === 'merge_request') {
       const cleanupResult = await this.clearExistingPullRequestAiComments(target, channel);
       syncResult.deletedCount += cleanupResult.deletedCount;
@@ -209,6 +213,8 @@ export class GitHubProvider implements ISCMProvider {
     try {
       const results = new Set<string>();
 
+      // GitHub code search 会分页返回结果，而且总量可能很大。
+      // 这里主动限制最大页数和结果数，避免把 provider 变成高延迟的仓库遍历器。
       for (let page = 1; page <= MAX_SEARCH_PAGES && results.size < MAX_SEARCH_RESULTS; page += 1) {
         const { data } = await this.client.get<GitHubSearchResponse>('/search/code', {
           params: {
@@ -254,6 +260,8 @@ export class GitHubProvider implements ISCMProvider {
     payload: ReviewCheckRunPayload
   ): Promise<ReviewCheckRun | null> {
     try {
+      // 这里使用 commit status 而不是 GitHub Checks API。
+      // 原因是实现更轻，且对个人仓库 / 简单 PAT 的兼容性更好。
       await this.setCommitStatus(metadata, payload.name, payload);
       return {
         id: Date.now(),
@@ -282,6 +290,9 @@ export class GitHubProvider implements ISCMProvider {
     }
   }
 
+  /**
+   * 读取 Pull Request 元数据，并整理成主流程统一使用的描述对象。
+   */
   private async getPullRequestMetadata(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>
   ): Promise<PullRequestMetadata> {
@@ -317,6 +328,12 @@ export class GitHubProvider implements ISCMProvider {
     }
   }
 
+  /**
+   * 读取单次 commit review 所需元数据。
+   *
+   * commit 模式没有 PR 的 base/head 语义，因此这里需要自己从父提交推导 baseSha，
+   * 给后续 compare diff、checkout 和评论定位使用。
+   */
   private async getCommitMetadata(
     target: Extract<ReviewTarget, { kind: 'commit' }>
   ): Promise<PullRequestMetadata> {
@@ -354,6 +371,12 @@ export class GitHubProvider implements ISCMProvider {
     }
   }
 
+  /**
+   * 分页拉取 GitHub PR 文件变更列表，并只保留带 patch 的文本文件。
+   *
+   * GitHub 对二进制文件或超大 diff 可能不给 patch，此类文件会在这里自然跳过，
+   * 避免后续 parser 面对空 patch 做无意义处理。
+   */
   private async getPullRequestDiff(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>
   ): Promise<FileDiff[]> {
@@ -384,6 +407,9 @@ export class GitHubProvider implements ISCMProvider {
     }
   }
 
+  /**
+   * 基于 compare 接口构造 commit review 模式下的 diff 列表。
+   */
   private async getCommitDiff(
     target: Extract<ReviewTarget, { kind: 'commit' }>,
     metadata: PullRequestMetadata
@@ -406,6 +432,11 @@ export class GitHubProvider implements ISCMProvider {
     }
   }
 
+  /**
+   * 把评论逐条发布成 GitHub PR review comment。
+   *
+   * 这里使用行级评论接口，因此要求 path/line/side 都尽量准确，否则 GitHub 会拒绝。
+   */
   private async postPullRequestComments(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>,
     metadata: PullRequestMetadata,
@@ -441,6 +472,12 @@ export class GitHubProvider implements ISCMProvider {
     return { postedCount, failedCount };
   }
 
+  /**
+   * 把评论逐条发布到 commit comments。
+   *
+   * commit 评论接口对行定位的容错更差，因此这里有一层降级策略：
+   * 如果行级评论失败，就退回成普通 commit comment，至少保留 review 信息本身。
+   */
   private async postCommitComments(
     target: Extract<ReviewTarget, { kind: 'commit' }>,
     comments: ReviewComment[],
@@ -487,6 +524,9 @@ export class GitHubProvider implements ISCMProvider {
     return { postedCount, failedCount };
   }
 
+  /**
+   * 删除当前 PR 上由本服务创建的旧 AI 评论，避免多轮 review 累积噪音。
+   */
   private async clearExistingPullRequestAiComments(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>,
     channel: ReviewCommentChannel
@@ -501,6 +541,9 @@ export class GitHubProvider implements ISCMProvider {
     );
   }
 
+  /**
+   * 删除当前 commit 上由本服务创建的旧 AI 评论。
+   */
   private async clearExistingCommitAiComments(
     target: Extract<ReviewTarget, { kind: 'commit' }>,
     channel: ReviewCommentChannel
@@ -515,6 +558,9 @@ export class GitHubProvider implements ISCMProvider {
     );
   }
 
+  /**
+   * 分页列出 PR 上所有 review comments，供清理逻辑复用。
+   */
   private async listAllPullRequestComments(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>
   ): Promise<GitHubIssueComment[]> {
@@ -539,6 +585,9 @@ export class GitHubProvider implements ISCMProvider {
     return comments;
   }
 
+  /**
+   * 分页列出 commit 上所有 comments，供清理逻辑复用。
+   */
   private async listAllCommitComments(
     target: Extract<ReviewTarget, { kind: 'commit' }>
   ): Promise<GitHubIssueComment[]> {
@@ -563,6 +612,12 @@ export class GitHubProvider implements ISCMProvider {
     return comments;
   }
 
+  /**
+   * 根据隐藏 marker 和作者信息，删除当前通道下由本服务管理的旧评论。
+   *
+   * GitHub comment 一旦被删除就不可恢复，所以这里只清理“能明确确认属于本服务”的评论，
+   * 避免误删人工评论或其他机器人留下的内容。
+   */
   private async deleteManagedComments(
     comments: GitHubIssueComment[],
     channel: ReviewCommentChannel,
@@ -596,6 +651,9 @@ export class GitHubProvider implements ISCMProvider {
     };
   }
 
+  /**
+   * 获取当前 token 对应的 GitHub 用户，并在 provider 生命周期内复用。
+   */
   private async getCurrentUser(): Promise<GitHubCurrentUserResponse | null> {
     if (!this.currentUserPromise) {
       this.currentUserPromise = this.fetchCurrentUser();
@@ -604,6 +662,9 @@ export class GitHubProvider implements ISCMProvider {
     return this.currentUserPromise;
   }
 
+  /**
+   * 实际请求 `/user`，失败时只影响清理精度，不阻断主 review 流程。
+   */
   private async fetchCurrentUser(): Promise<GitHubCurrentUserResponse | null> {
     try {
       const { data } = await this.client.get<GitHubCurrentUserResponse>('/user');
@@ -616,6 +677,12 @@ export class GitHubProvider implements ISCMProvider {
     }
   }
 
+  /**
+   * 判断评论是否属于当前通道下由本服务写入的 AI 评论。
+   *
+   * 新评论依赖隐藏 marker 识别；同时保留对旧版本评论样式的兼容，
+   * 这样历史遗留评论也能被新版本平滑清理。
+   */
   private isManagedAiComment(
     body: string,
     currentUser: GitHubCurrentUserResponse | null,
@@ -640,6 +707,9 @@ export class GitHubProvider implements ISCMProvider {
       || Boolean(currentUser.login && author?.login === currentUser.login);
   }
 
+  /**
+   * 给评论正文插入隐藏 marker，后续同步时据此识别和清理。
+   */
   private decorateAiCommentBody(body: string, channel: ReviewCommentChannel): string {
     const commentMarker = this.getCommentMarker(channel);
     if (body.includes(commentMarker)) {
@@ -649,18 +719,29 @@ export class GitHubProvider implements ISCMProvider {
     return `${commentMarker}\n${body}`;
   }
 
+  /**
+   * 为不同评论通道生成独立 marker，避免多个分析链路互相误删评论。
+   */
   private getCommentMarker(channel: ReviewCommentChannel): string {
     return channel === 'ai-review'
       ? AI_COMMENT_MARKER
       : `<!-- ai-review-server-comment:${channel} -->`;
   }
 
+  /**
+   * 生成“已过期”marker。
+   *
+   * GitHub 当前实现没有把旧评论标过期，只是保留这个通道语义，方便与其他 SCM 保持一致。
+   */
   private getOutdatedMarker(channel: ReviewCommentChannel): string {
     return channel === 'ai-review'
       ? AI_OUTDATED_MARKER
       : `<!-- ai-review-server-outdated:${channel} -->`;
   }
 
+  /**
+   * commit review 模式优先使用显式 baseSha；若调用方没给，则退回到第一个父提交。
+   */
   private resolveBaseSha(baseSha: string, parentIds?: string[]): string {
     if (baseSha && !/^0+$/.test(baseSha)) {
       return baseSha;
@@ -669,6 +750,9 @@ export class GitHubProvider implements ISCMProvider {
     return parentIds?.[0] || '';
   }
 
+  /**
+   * 把 GitHub 单文件 diff 条目转换成内部统一的 `FileDiff`。
+   */
   private parseDiffEntry(file: GitHubPullRequestFile): FileDiff {
     const status = this.resolveDiffStatus(file.status);
     const parsed = DiffParser.parsePatch(file.patch || '', file.filename, status);
@@ -676,6 +760,9 @@ export class GitHubProvider implements ISCMProvider {
     return parsed;
   }
 
+  /**
+   * 把 GitHub 文件状态映射到内部 diff 状态枚举。
+   */
   private resolveDiffStatus(status: string): FileDiff['status'] {
     switch (status) {
       case 'added':
@@ -689,6 +776,9 @@ export class GitHubProvider implements ISCMProvider {
     }
   }
 
+  /**
+   * 使用 commit status API 表达 review 进度和结论。
+   */
   private async setCommitStatus(
     metadata: PullRequestMetadata,
     name: string,
@@ -705,6 +795,9 @@ export class GitHubProvider implements ISCMProvider {
     );
   }
 
+  /**
+   * 把内部 review 生命周期状态映射到 GitHub 支持的 status state。
+   */
   private mapStatus(
     status: ReviewCheckRunPayload['status'] | ReviewCheckRunUpdatePayload['status'],
     conclusion?: ReviewCheckConclusion
@@ -725,15 +818,24 @@ export class GitHubProvider implements ISCMProvider {
     }
   }
 
+  /**
+   * 截断状态描述，满足 GitHub status description 长度限制。
+   */
   private buildStatusDescription(payload: ReviewCheckRunPayload | ReviewCheckRunUpdatePayload): string {
     const description = payload.output.summary || payload.output.title || 'AI review update';
     return description.length > 140 ? `${description.slice(0, 137)}...` : description;
   }
 
+  /**
+   * 构造 commit 页面 URL，作为状态详情缺省跳转地址。
+   */
   private buildCommitUrl(owner: string, repo: string, sha: string): string {
     return `${this.webBaseUrl}/${owner}/${repo}/commit/${sha}`;
   }
 
+  /**
+   * 对路径逐段编码，保留 `/` 分隔层级，兼容 GitHub contents API。
+   */
   private encodePath(filePath: string): string {
     return filePath.split('/').map((segment) => encodeURIComponent(segment)).join('/');
   }

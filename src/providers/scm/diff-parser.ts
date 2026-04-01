@@ -8,6 +8,10 @@ import { DiffChunk, FileDiff } from '../../types/index.js';
 
 /**
  * 解析 SCM 返回的 patch，并提取文件级 hunk 信息。
+ *
+ * 这里有意只做“把原始 patch 按 hunk 边界拆开”这件事，不尝试在 provider 层
+ * 推导更细粒度的增删行语义。后续 review 流程会在统一的 `FileDiff` 结构上继续做
+ * 行级扫描、上下文补全和提示词构建。
  */
 export class DiffParser {
   /**
@@ -19,7 +23,8 @@ export class DiffParser {
     let currentChunk: DiffChunk | null = null;
 
     for (const line of lines) {
-      // 匹配 @@ -oldStart,oldLines +newStart,newLines @@
+      // 匹配 unified diff hunk header，例如 `@@ -10,2 +12,4 @@`。
+      // 某些 diff 会省略行数，此时语义上表示单行，因此默认补成 1。
       const hunkHeader = line.match(/^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
       if (hunkHeader) {
         if (currentChunk) chunks.push(currentChunk);
@@ -46,6 +51,12 @@ export class DiffParser {
     };
   }
 
+  /**
+   * 把不同 SCM 返回的字符串状态统一折叠到内部允许的枚举上。
+   *
+   * provider 上游偶尔会出现未知状态或空值，这里保守退回 `modified`，
+   * 避免因为状态解析失败直接打断整个 review 流程。
+   */
   private static normalizeStatus(status: string): FileDiff['status'] {
     switch (status) {
       case 'added':

@@ -98,6 +98,9 @@ export class GitClient {
 
   /**
    * 在指定 git 目录上下文中执行 git 子命令。
+   *
+   * review 场景下大量使用 bare mirror，因此这里统一走 `--git-dir`，
+   * 不要求当前目录本身是一个 worktree。
    */
   private async runForGitDir(gitDir: string, args: string[]): Promise<string> {
     return this.run(['--git-dir', gitDir, ...args]);
@@ -105,6 +108,9 @@ export class GitClient {
 
   /**
    * 执行底层 git 命令，并统一注入禁用交互与认证参数。
+   *
+   * `GIT_TERMINAL_PROMPT=0` 可以避免 token 失效时卡在交互输入，
+   * 让服务端直接拿到确定性失败。
    */
   private async run(args: string[]): Promise<string> {
     const authArgs = this.buildAuthArgs();
@@ -127,6 +133,9 @@ export class GitClient {
 
   /**
    * 在存在 token 时构造 git HTTP 认证头参数。
+   *
+   * GitHub 与 GitLab 采用不同的 Basic 用户名占位，
+   * 这里统一在客户端内部处理，上层无需关心。
    */
   private buildAuthArgs(): string[] {
     if (!this.options.token) {
@@ -140,6 +149,8 @@ export class GitClient {
 
   /**
    * 在底层错误是 `ENOENT` 时转成更明确的 git 缺失提示。
+   *
+   * 这样部署环境如果漏装 git，会直接抛出高可读错误，而不是系统底层异常。
    */
   private rethrowIfGitMissing(error: unknown): void {
     if (getErrorCode(error) === 'ENOENT') {

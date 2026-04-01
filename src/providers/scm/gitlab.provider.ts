@@ -132,6 +132,8 @@ const MAX_SEARCH_RESULTS = 200;
 export class GitLabProvider implements ISCMProvider {
   private readonly client: AxiosInstance;
   private readonly webBaseUrl: string;
+  // 清理旧评论时需要确认“当前 token 是哪个用户”，这里缓存结果，
+  // 避免每次同步评论都重复拉一次 `/user`。
   private currentUserPromise: Promise<GitLabCurrentUserResponse | null> | null = null;
 
   /**
@@ -192,6 +194,8 @@ export class GitLabProvider implements ISCMProvider {
       failedCount: 0,
     };
 
+    // GitLab discussion 体系下，多轮 review 最容易造成“旧评论残留 + 新评论再发一遍”。
+    // 这里先做清理/过期标记，再发本轮评论，尽量让目标页面只保留最新结论。
     if (target.kind === 'merge_request') {
       const cleanupResult = await this.clearExistingMergeRequestAiComments(target, channel);
       syncResult.deletedCount += cleanupResult.deletedCount;
@@ -256,6 +260,8 @@ export class GitLabProvider implements ISCMProvider {
       const results = new Set<string>();
       let currentPage = 1;
 
+      // GitLab search 通过响应头返回下一页信息，而不是直接在 body 里给 total count。
+      // 这里按 header 驱动翻页，并施加页数/结果上限，控制 provider 延迟。
       for (let pageCount = 0; pageCount < MAX_SEARCH_PAGES && results.size < MAX_SEARCH_RESULTS; pageCount += 1) {
         const response = await this.client.get<GitLabSearchResult[]>(`/projects/${projectId}/search`, {
           params: {
@@ -339,6 +345,9 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 读取 Merge Request 元数据，并补齐 diff refs 等 review 所需字段。
+   *
+   * GitLab MR 有时不会稳定返回完整的 `diff_refs`，因此这里会在必要时额外查询
+   * 最新版本信息，保证后续行级评论能拿到完整 base/start/head 三元组。
    */
   private async getMergeRequestMetadata(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>
@@ -416,6 +425,9 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 分页拉取 Merge Request diff，并转换成内部 FileDiff 结构。
+   *
+   * GitLab 的 MR diffs 接口会分页，而且可能返回 rename/add/delete 等多种状态标记，
+   * 这里统一规整成 `FileDiff` 供后续主流程消费。
    */
   private async getMergeRequestDiff(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>
@@ -454,6 +466,8 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 基于 compare 接口拉取两个 commit 之间的 diff。
+   *
+   * compare 超时或同引用比较时都不应视为致命错误；前者打告警，后者直接视为无 diff。
    */
   private async getCommitDiff(
     target: Extract<ReviewTarget, { kind: 'commit' }>,
@@ -498,6 +512,9 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 把评论逐条发布到 Merge Request discussion 中。
+   *
+   * GitLab 的行级评论依赖 position 对象，base/start/head 和左右侧行号必须匹配，
+   * 因此 metadata.diffRefs 是 MR 评论发布的关键前置条件。
    */
   private async postMergeRequestComments(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>,
@@ -595,6 +612,9 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 在发布新 MR 评论前，清理当前目标上上一轮 AI 留下的旧评论。
+   *
+   * 对纯 AI discussion 直接删除；如果 discussion 里已经混入人工回复，则只把 AI note
+   * 标成“已过期”，避免破坏人工讨论上下文。
    */
   private async clearExistingMergeRequestAiComments(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>,
@@ -778,6 +798,10 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 从 discussion 列表中挑出可安全删除的旧 AI note。
+   *
+   * 规则分两种：
+   * 1. 整个 discussion 都是 AI note：可以整批删除
+   * 2. discussion 里已经有人类回复：只能把 AI note 标记为过期，保留线程
    */
   private async extractAiCleanupCandidates(
     discussions: GitLabDiscussion[],
@@ -850,6 +874,8 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 判断一条 discussion note 是否属于本服务创建和维护的 AI 评论。
+   *
+   * 新版依赖隐藏 marker；旧版历史评论则通过特征正文兼容识别，保证升级后仍能清理干净。
    */
   private isManagedAiNote(
     body: string,
@@ -896,6 +922,8 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 为带有人类回复的旧 AI 评论追加“已过期”提示，而不是直接删除整条线程。
+   *
+   * 这样既能告诉读者这条评论针对的是旧代码，也不会抹掉后续人工讨论的语境。
    */
   private buildOutdatedAiCommentBody(body: string, channel: ReviewCommentChannel): string {
     if (this.isOutdatedAiNote(body, channel)) {
@@ -934,6 +962,9 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 获取 Merge Request 最新一次 diff version 对应的 refs。
+   *
+   * 当 MR 主接口缺少完整 diff_refs 时，行级评论仍然依赖这组 refs 定位，因此需要
+   * 额外回查 versions 列表并选取最新版本。
    */
   private async getLatestMergeRequestDiffRefs(
     target: Extract<ReviewTarget, { kind: 'merge_request' }>
@@ -1016,6 +1047,9 @@ export class GitLabProvider implements ISCMProvider {
 
   /**
    * 通过 GitLab commit status 接口创建或更新状态记录。
+   *
+   * GitLab 的 status 模型本身就是“同名上下文反复更新”，所以 create/update 最终都落在
+   * 同一个 API 上，provider 对上层暴露成统一的状态写入能力即可。
    */
   private async setCommitStatus(
     metadata: PullRequestMetadata,

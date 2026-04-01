@@ -63,6 +63,7 @@ interface SemanticScopeDescriptor {
  * 结合 TypeScript Compiler API、ts-morph 和 tsquery 对代码 diff 进行结构化分析。
  */
 export class CodeAnalyzer {
+  // 这些关键字出现在 diff 里时经常只是语法噪音，不值得作为跨文件检索候选。
   private static readonly EXCLUDED_IDENTIFIERS = new Set([
     'if',
     'for',
@@ -103,6 +104,9 @@ export class CodeAnalyzer {
 
   /**
    * 优先按语义容器拆分 diff；如果语义分段收益不明显，则回退到按行距切段。
+   *
+   * 目标不是绝对精确地还原执行流，而是尽量让一个 review segment 落在同一个函数、
+   * 方法或类作用域内，这样 prompt 的上下文更聚焦。
    */
   async segmentDiffBySemanticScope(
     filePath: string,
@@ -160,6 +164,9 @@ export class CodeAnalyzer {
 
   /**
    * 在特定文件中提取特定符号的定义
+   *
+   * 这里面向的是“已知符号名 -> 找定义”场景，因此不会做全文件遍历式导出分析，
+   * 只按函数、接口、类型、类和函数变量这些高价值节点做定向提取。
    */
   async extractSymbol(filePath: string, content: string, symbols: string[]): Promise<ExtractedSymbol[]> {
     if (!content || symbols.length === 0) return [];
@@ -223,6 +230,9 @@ export class CodeAnalyzer {
 
   /**
    * 分析单个文件 diff，产出候选标识符和本地定义符号。
+   *
+   * 这是 RAG 的主入口之一：先用 AST 找到变更作用域，再把局部符号、语义切片和
+   * 候选标识符一起返回，供上层决定是否继续跨文件扩展。
    */
   async analyzeFileDiff(filePath: string, content: string, diff: FileDiff): Promise<FileDiffAnalysis> {
     const diffContent = diff.chunks.map((chunk) => chunk.content).join('\n');
@@ -248,6 +258,8 @@ export class CodeAnalyzer {
         localSymbols
       );
 
+      // 候选标识符采用“多来源累积分”的方式排序：
+      // import 命中、调用点命中、类型引用命中和 diff 文本启发式都会叠加分数。
       const rankedCandidates = new Map<string, IdentifierCandidate>();
       const changedWindowText = [
         touchedLines.map((entry) => entry.text).join('\n'),
@@ -360,6 +372,8 @@ export class CodeAnalyzer {
 
   /**
    * 从 Diff 中提取高置信度标识符，优先保留 import、调用点和类型引用。
+   *
+   * 这是 AST 分析失败时的兜底方案，同时也会作为补充信号与 AST 结果合并。
    */
   static getPotentialIdentifiers(content: string): IdentifierCandidate[] {
     const rankedCandidates = new Map<string, IdentifierCandidate>();
@@ -430,6 +444,9 @@ export class CodeAnalyzer {
     });
   }
 
+  /**
+   * 判断某个标识符是否值得继续追踪。
+   */
   private static isUsefulIdentifier(name: string): boolean {
     if (!/^[A-Za-z_$][\w$]*$/.test(name) || name.length < 2) {
       return false;
@@ -467,6 +484,9 @@ export class CodeAnalyzer {
 
   /**
    * 使用 TypeScript AST 提取变更涉及的最小语义作用域节点。
+   *
+   * 这里会优先选择更“小”的节点，并剔除被更大节点完全包裹的重复候选，
+   * 目的是让提取到的上下文尽量聚焦。
    */
   private selectChangedScopeNodes(sourceFile: TsSourceFile, touchedLines: Set<number>): TsNode[] {
     const candidateSelector = [
@@ -504,6 +524,9 @@ export class CodeAnalyzer {
 
   /**
    * 判断一个 tsquery 节点是否与本次 diff 的新增行重叠。
+   *
+   * `VariableStatement` 会额外过滤，只把函数变量视为语义作用域，避免普通常量声明
+   * 被误当成值得单独注入 prompt 的上下文块。
    */
   private isChangedScopeNode(sourceFile: TsSourceFile, node: TsNode, touchedLines: Set<number>): boolean {
     if (node.kind === SyntaxKind.VariableStatement) {
@@ -553,6 +576,9 @@ export class CodeAnalyzer {
 
   /**
    * 从当前文件的变更作用域中提取关键保护分支和同文件依赖，形成轻量语义切片。
+   *
+   * 这些切片比完整函数定义更短，适合在 prompt 预算有限时补充“这个作用域依赖了什么、
+   * 保护了什么、数据往哪里流”。
    */
   private extractSemanticSlices(
     filePath: string,
@@ -624,6 +650,8 @@ export class CodeAnalyzer {
 
   /**
    * 生成当前作用域的一跳/二跳调用链摘要，帮助 prompt 理解真实执行链。
+   *
+   * 这里故意只追两跳，并且限制每跳数量，避免把摘要膨胀成另一份完整代码。
    */
   private buildCallChainSummary(scopeNode: TsNode, sourceFile: SourceFile): string | null {
     const entryName = this.getNodeName(scopeNode) || '匿名作用域';
@@ -666,6 +694,9 @@ export class CodeAnalyzer {
 
   /**
    * 生成当前作用域的轻量数据流摘要，突出参数、保护条件和敏感下游调用。
+   *
+   * 它不做严格的数据流分析，只做“足够便宜但有用”的启发式提炼，用来提示模型关注
+   * 输入、保护分支和可能产生副作用的调用。
    */
   private buildDataFlowSummary(scopeNode: TsNode): string | null {
     const parameterNames = this.extractParameterNames(scopeNode);
@@ -741,6 +772,8 @@ export class CodeAnalyzer {
 
   /**
    * 使用已经载入的 ts-morph SourceFile 解析本文件内的依赖定义，避免重复建 AST。
+   *
+   * 这一步只在同文件依赖提取时使用，属于低成本补充，不会跨文件扩散。
    */
   private extractSymbolsFromMorphSourceFile(sourceFile: SourceFile, symbols: string[]): ExtractedSymbol[] {
     const results: ExtractedSymbol[] = [];
@@ -904,6 +937,9 @@ export class CodeAnalyzer {
 
   /**
    * 根据被删掉的语句模式，生成更贴近 review 关注点的旧逻辑摘要。
+   *
+   * 删除上下文的目标不是还原全部旧行为，而是告诉模型“删掉的是保护逻辑、隔离条件，
+   * 还是并发/事务控制”，从而提高对回归风险的敏感度。
    */
   private describeRemovedBehavior(removedTexts: string[]): string {
     const joined = removedTexts.join('\n').toLowerCase();
@@ -976,6 +1012,9 @@ export class CodeAnalyzer {
     return bindings;
   }
 
+  /**
+   * 统一提取错误消息，避免日志分支里散落重复的类型判断。
+   */
   private static getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }

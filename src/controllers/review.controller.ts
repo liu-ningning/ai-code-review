@@ -14,23 +14,48 @@ import { logger } from '../shared/logger.js';
 import { ISCMProvider, ReviewProgressEvent, ReviewRunResult, ReviewTarget } from '../types/index.js';
 import { dashboardScript, dashboardStyles, renderDashboardPage } from '../ui/dashboard.js';
 
+/**
+ * 控制器注册时由入口层注入的依赖。
+ *
+ * - `createScmProvider` 按当前配置创建 GitHub 或 GitLab provider
+ * - `reviewCoordinator` 负责同一 review 目标的串行化与去重
+ */
 interface RegisterReviewControllerOptions {
   createScmProvider: () => ISCMProvider;
   reviewCoordinator: ReviewCoordinator;
 }
 
+/**
+ * 流式返回给前端时使用的轻量进度统计。
+ *
+ * 这组字段不会替代 pipeline 的原始进度事件，只是把它们统一压成
+ * 前端更容易展示的百分比模型。
+ */
 interface StreamProgressMetrics {
   current?: number;
   total?: number;
   percent?: number;
 }
 
+/**
+ * 维护一次 NDJSON 流在控制器侧的临时状态。
+ *
+ * 由于 pipeline 的不同阶段并不会始终携带完整进度信息，
+ * 这里会把“已完成文件数 / 总文件数 / 当前文件”缓存下来，
+ * 供 heartbeat 和后续事件复用。
+ */
 interface StreamProgressState {
   completedFiles: number;
   totalFiles: number;
   currentFilePath?: string;
 }
 
+/**
+ * 只声明当前 webhook 处理逻辑真正会读取到的 GitLab Merge Request 字段。
+ *
+ * 这里没有完整覆盖 GitLab webhook schema，而是用一个最小子集避免
+ * 控制器代码里充满 `any`。
+ */
 interface GitLabMergeRequestWebhookPayload {
   object_kind?: string;
   project?: {
@@ -61,16 +86,28 @@ export function registerReviewController(
   fastify: FastifyInstance,
   options: RegisterReviewControllerOptions
 ): void {
+  /**
+   * Dashboard 首页。
+   *
+   * 这里直接返回内嵌 HTML，而不是单独起一个前端工程，
+   * 这样部署时只需要启动一个 Fastify 服务即可。
+   */
   fastify.get('/', async (_request, reply) => {
     reply.type('text/html; charset=utf-8');
     return renderDashboardPage();
   });
 
+  /**
+   * Dashboard 样式入口。
+   */
   fastify.get('/assets/dashboard.css', async (_request, reply) => {
     reply.type('text/css; charset=utf-8');
     return dashboardStyles();
   });
 
+  /**
+   * Dashboard 脚本入口。
+   */
   fastify.get('/assets/dashboard.js', async (_request, reply) => {
     reply.type('application/javascript; charset=utf-8');
     return dashboardScript();
@@ -85,16 +122,22 @@ export function registerReviewController(
 
   /**
    * 接收 GitLab Merge Request webhook，并在请求通过校验后异步调度 review。
+   *
+   * 这个入口只负责“验证并投递任务”，不会同步等待整个 review 跑完。
+   * 这样 webhook 可以快速返回，避免被 GitLab 判定为超时。
    */
   fastify.post('/webhook', async (request, reply) => {
+    // 当前 webhook 只实现了 GitLab 版本；GitHub 模式请走 /ci/review。
     if (config.SCM_TYPE !== 'gitlab') {
       return reply.status(501).send({ error: 'Webhook endpoint is only implemented for gitlab SCM' });
     }
 
+    // GitLab 模式至少需要有 API token，否则后续无法读取 MR / diff。
     if (!config.GITLAB_TOKEN) {
       return reply.status(503).send({ error: 'GITLAB_TOKEN is not configured' });
     }
 
+    // 如果配置了 webhook secret，这里会做最小校验。
     if (!verifyGitLabWebhook(request)) {
       logger.warn('Invalid GitLab webhook token detected');
       return reply.status(401).send({ error: 'Unauthorized' });
@@ -103,10 +146,12 @@ export function registerReviewController(
     const body = request.body as GitLabMergeRequestWebhookPayload;
     const eventName = request.headers['x-gitlab-event'];
 
+    // 非 MR Hook 或非 merge_request 事件直接忽略，避免无关 webhook 误触发。
     if (eventName !== 'Merge Request Hook' || body.object_kind !== 'merge_request') {
       return reply.send({ message: 'Ignored event' });
     }
 
+    // 仅在 open / reopen / update 且真正发生代码变更时触发。
     if (!isMergeRequestUpdateWithCodeChange(body)) {
       return reply.send({ message: 'Ignored merge request action' });
     }
@@ -118,6 +163,7 @@ export function registerReviewController(
       body.object_attributes?.last_commit?.sha ||
       body.object_attributes?.last_commit?.commit;
 
+    // owner / repo / MR 编号 / head sha 是后续调度最基本的四元组。
     if (!projectPath || !mrNumber || !headSha) {
       logger.warn('GitLab merge request webhook payload is missing required fields', {
         hasProjectPath: Boolean(projectPath),
@@ -130,6 +176,7 @@ export function registerReviewController(
     const { owner, repo } = splitProjectPath(projectPath);
 
     logger.info(`GitLab webhook verified for ${owner}/${repo} MR !${mrNumber}`);
+    // 这里调用的是 coordinator 的“异步排队”能力，不阻塞当前 HTTP 响应。
     options.reviewCoordinator.schedule({
       owner,
       repo,
@@ -142,8 +189,14 @@ export function registerReviewController(
 
   /**
    * 接收 CI 主动触发的 review 请求，支持普通 JSON 响应和 NDJSON 流式进度输出。
+   *
+   * 这是当前项目最通用的接入入口：
+   * - CI/CD 可以直接调用
+   * - Dashboard 也复用这个接口
+   * - 既支持一次性 JSON，也支持实时 NDJSON
    */
   fastify.post('/ci/review', async (request, reply) => {
+    // 两种 SCM 模式分别检查各自的 token，避免后续执行到 provider 才报错。
     if (config.SCM_TYPE === 'gitlab' && !config.GITLAB_TOKEN) {
       return reply.status(503).send({ error: 'GITLAB_TOKEN is not configured' });
     }
@@ -179,8 +232,12 @@ export function registerReviewController(
       return reply.status(400).send({ error: 'projectPath is required' });
     }
 
+    // projectPath 会统一被拆成 provider 需要的 owner / repo 形式。
     const { owner, repo } = splitProjectPath(body.projectPath);
     const requestId = request.id;
+    // 兼容两种调用方式：
+    // - 显式传 kind=merge_request
+    // - 只传 mergeRequestIid，也推断为 merge_request
     const requestedKind =
       body.kind === 'merge_request' || body.mergeRequestIid !== undefined ? 'merge_request' : 'commit';
 
@@ -198,6 +255,7 @@ export function registerReviewController(
         number: mergeRequestIid,
       };
     } else {
+      // commit 模式下 branch / headSha 是最小必填项，其余元数据只是增强展示。
       if (!body.branch || !body.headSha) {
         return reply.status(400).send({ error: 'branch and headSha are required for commit review' });
       }
@@ -222,12 +280,15 @@ export function registerReviewController(
       targetKind: target.kind,
     });
 
+    // 流式模式下，控制器会把 pipeline 的阶段事件转成 NDJSON 持续写给调用方。
     if (streamProgress) {
       const stream = new PassThrough();
       const streamProgressState: StreamProgressState = {
         completedFiles: 0,
         totalFiles: 0,
       };
+      // 这里单独创建一个带 onProgress 回调的 pipeline，
+      // 使控制器能把内部阶段实时映射成前端可读消息。
       const pipeline = new ReviewPipeline(options.createScmProvider(), {
         onProgress: async (event: ReviewProgressEvent) => {
           writeNdjsonLine(stream, {
@@ -241,6 +302,7 @@ export function registerReviewController(
         writeNdjsonLine(stream, buildHeartbeatEvent(requestId, streamProgressState));
       }, 10_000);
 
+      // 对反向代理和浏览器显式声明这是一个不该缓冲的 NDJSON 流。
       reply
         .code(200)
         .header('content-type', 'application/x-ndjson; charset=utf-8')
@@ -252,6 +314,7 @@ export function registerReviewController(
       writeNdjsonLine(stream, buildAcceptedEvent(requestId, owner, repo, target.kind));
 
       try {
+        // runExclusive 用于保证同一 review 目标不会被并发重复执行。
         const result = await options.reviewCoordinator.runExclusive(
           buildCiReviewExecutionKey(target),
           () => pipeline.run(target)
@@ -261,6 +324,7 @@ export function registerReviewController(
 
         writeNdjsonLine(stream, buildResultEvent(statusCode, responsePayload));
       } catch (error: unknown) {
+        // 流式模式下错误也要通过统一事件返回，避免调用方只能看到连接中断。
         writeNdjsonLine(stream, buildErrorEvent(requestId, error));
       } finally {
         clearInterval(heartbeat);
@@ -270,6 +334,7 @@ export function registerReviewController(
       return reply;
     }
 
+    // 同步模式下不返回阶段事件，只在 review 完成后一次性返回最终结果。
     const pipeline = new ReviewPipeline(options.createScmProvider());
     const result = await options.reviewCoordinator.runExclusive(
       buildCiReviewExecutionKey(target),
@@ -294,6 +359,9 @@ export function registerReviewController(
 
 /**
  * 把 `group/project` 形式的 GitLab 路径拆成 owner 和 repo。
+ *
+ * 注意：这里并不强绑定 GitLab，GitHub 的 `owner/repo` 也同样适用。
+ * 对于更深层级的 group/project/subproject，owner 会保留斜杠路径。
  */
 function splitProjectPath(projectPath: string): { owner: string; repo: string } {
   const segments = projectPath
@@ -314,6 +382,9 @@ function splitProjectPath(projectPath: string): { owner: string; repo: string } 
 
 /**
  * 校验 GitLab webhook 请求头里的 token 是否与服务端配置一致。
+ *
+ * 如果没有配置 `GITLAB_WEBHOOK_SECRET`，则视为不启用 secret 校验，
+ * 直接放行到后续逻辑。
  */
 function verifyGitLabWebhook(request: FastifyRequest): boolean {
   if (!config.GITLAB_WEBHOOK_SECRET) {
@@ -326,6 +397,10 @@ function verifyGitLabWebhook(request: FastifyRequest): boolean {
 
 /**
  * 从自定义请求头或 Bearer Token 中提取 CI review 调用凭证。
+ *
+ * 支持两种常见调用方式：
+ * - `X-Review-Token: <token>`
+ * - `Authorization: Bearer <token>`
  */
 function extractCiReviewToken(request: FastifyRequest): string | null {
   const directToken = request.headers['x-review-token'];
@@ -343,6 +418,11 @@ function extractCiReviewToken(request: FastifyRequest): string | null {
 
 /**
  * 判断当前 CI review 请求是否要求以流式方式返回执行进度。
+ *
+ * 兼容三种触发方式：
+ * - query: `?stream=1`
+ * - header: `X-Review-Stream: 1`
+ * - header: `Accept: application/x-ndjson`
  */
 function shouldStreamCiReviewProgress(request: FastifyRequest): boolean {
   const query = request.query as { stream?: string | boolean } | undefined;
@@ -361,6 +441,8 @@ function shouldStreamCiReviewProgress(request: FastifyRequest): boolean {
 
 /**
  * 把布尔型或字符串型开关值统一转换为布尔判断结果。
+ *
+ * 这样 query/header 里的 `1/true/yes/on/ndjson` 都能被识别成“启用”。
  */
 function isTruthyFlag(value: unknown): boolean {
   if (typeof value === 'boolean') {
@@ -376,6 +458,9 @@ function isTruthyFlag(value: unknown): boolean {
 
 /**
  * 从完整评论列表里提炼一组短摘要，供接口响应快速预览 review 发现。
+ *
+ * 控制器对外只返回前几条 findings 摘要，避免一次性把完整评论正文
+ * 全部塞进首页面板或流式结果里。
  */
 function buildFindingPreview(comments: Array<{ path: string; line: number; body: string }>): string[] {
   return comments.slice(0, 8).map((comment) => {
@@ -386,6 +471,9 @@ function buildFindingPreview(comments: Array<{ path: string; line: number; body:
 
 /**
  * 把 review 运行结果整理成对外接口统一返回的数据结构。
+ *
+ * 这里的结构既用于普通 JSON 响应，也用于流式 result 事件，
+ * 所以字段尽量保持扁平、稳定。
  */
 function buildReviewResponsePayload(result: ReviewRunResult, requestId: string): {
   review: string;
@@ -417,6 +505,8 @@ function buildReviewResponsePayload(result: ReviewRunResult, requestId: string):
 
 /**
  * 向 NDJSON 输出流写入一行 JSON 数据，用于持续推送 review 进度。
+ *
+ * NDJSON 的核心约束就是“一行一个 JSON 对象”，调用方可以边读边解析。
  */
 function writeNdjsonLine(stream: PassThrough, payload: Record<string, unknown>): void {
   stream.write(`${JSON.stringify(payload)}\n`);
@@ -424,6 +514,11 @@ function writeNdjsonLine(stream: PassThrough, payload: Record<string, unknown>):
 
 /**
  * 把 pipeline 的原始进度事件整理成更适合人类阅读的流式消息格式。
+ *
+ * pipeline 内部事件更偏工程视角，这里会：
+ * - 补充 emoji 和可读消息
+ * - 维护完成数量 / 总数
+ * - 统一转成前端状态面板可消费的 `progress`
  */
 function decorateProgressEventForStream(
   event: ReviewProgressEvent,
@@ -459,6 +554,8 @@ function decorateProgressEventForStream(
   const error = readStringField(data, 'error');
   const shortPath = pathValue ? shortenPathForDisplay(pathValue) : undefined;
 
+  // 把每次事件里零散出现的统计字段回填到 state，
+  // 让 heartbeat 和后续事件即使缺字段也能保持展示稳定。
   if (typeof total === 'number' && total >= 0) {
     state.totalFiles = total;
   }
@@ -590,6 +687,8 @@ function decorateProgressEventForStream(
 
 /**
  * 生成流式 accepted 事件，向调用方确认请求已被接收。
+ *
+ * 这个事件通常是前端最先收到的一条消息，用来尽快把界面切到“已开始执行”状态。
  */
 function buildAcceptedEvent(
   requestId: string,
@@ -613,6 +712,9 @@ function buildAcceptedEvent(
 
 /**
  * 基于最新进度快照生成心跳事件，避免长耗时阶段看起来像卡住。
+ *
+ * 当 checkout、LLM 调用等阶段耗时较长时，heartbeat 可以维持前端活跃感，
+ * 同时带上当前文件和完成比例。
  */
 function buildHeartbeatEvent(
   requestId: string,
@@ -641,6 +743,10 @@ function buildHeartbeatEvent(
 
 /**
  * 生成流式 result 事件，给出最终结论与简短人类可读摘要。
+ *
+ * result 是流式链路里的“终局事件”：
+ * - `statusCode` 表示最终 HTTP 语义
+ * - 其余字段和普通 JSON 响应基本保持一致
  */
 function buildResultEvent(
   statusCode: number,
@@ -667,6 +773,8 @@ function buildResultEvent(
 
 /**
  * 生成流式 error 事件，向调用方明确指出执行失败原因。
+ *
+ * 与直接断开连接相比，显式发 error 事件更利于前端稳定处理失败态。
  */
 function buildErrorEvent(requestId: string, error: unknown): Record<string, unknown> {
   const errorMessage = error instanceof Error ? error.message : String(error);
@@ -682,6 +790,8 @@ function buildErrorEvent(requestId: string, error: unknown): Record<string, unkn
 
 /**
  * 读取数据对象中的数字字段，并在可解析时返回数值。
+ *
+ * pipeline 的 data 字段允许 string/number 混用，这里统一做容错解析。
  */
 function readNumberField(data: Record<string, unknown>, key: string): number | undefined {
   const value = data[key];
@@ -699,6 +809,8 @@ function readNumberField(data: Record<string, unknown>, key: string): number | u
 
 /**
  * 读取数据对象中的字符串字段，并在非空时返回。
+ *
+ * 主要用于从 progress event 的 data 里安全提取 path / scale / error 等字段。
  */
 function readStringField(data: Record<string, unknown>, key: string): string | undefined {
   const value = data[key];
@@ -707,6 +819,8 @@ function readStringField(data: Record<string, unknown>, key: string): string | u
 
 /**
  * 根据当前完成数量和总量构造统一的进度指标。
+ *
+ * 如果缺少 total 或 total <= 0，则返回 undefined，前端会保持当前展示。
  */
 function buildStreamProgressMetrics(current?: number, total?: number): StreamProgressMetrics | undefined {
   if (typeof current !== 'number' || typeof total !== 'number' || total <= 0) {
@@ -722,6 +836,9 @@ function buildStreamProgressMetrics(current?: number, total?: number): StreamPro
 
 /**
  * 生成 review 完成阶段的简短展示语句。
+ *
+ * 这里优先按“同步失败 / 文件处理失败 / review 未通过 / 正常完成”的顺序
+ * 判断，确保给调用方最关键的失败信号。
  */
 function buildCompletionProgressMessage(
   conclusion: string | undefined,
@@ -751,6 +868,8 @@ function buildCompletionProgressMessage(
 
 /**
  * 为 CI 主动调用构造稳定的串行化 key，避免同一目标并发执行。
+ *
+ * merge_request 和 commit 分别使用不同命名空间，避免 key 冲突。
  */
 function buildCiReviewExecutionKey(target: ReviewTarget): string {
   if (target.kind === 'merge_request') {
@@ -762,6 +881,10 @@ function buildCiReviewExecutionKey(target: ReviewTarget): string {
 
 /**
  * 根据 review 结果判断当前 HTTP 响应应返回成功、拒绝还是执行失败。
+ *
+ * - 500: review 过程本身出错，或评论同步失败
+ * - 409: review 成功执行，但给出了阻断性评论
+ * - 200: review 成功执行且未阻断
  */
 function resolveReviewHttpStatus(result: ReviewRunResult): 200 | 409 | 500 {
   if (result.errorCount > 0 || result.commentSync.failedCount > 0) {
@@ -773,6 +896,8 @@ function resolveReviewHttpStatus(result: ReviewRunResult): 200 | 409 | 500 {
 
 /**
  * 缩短长路径，优先保留末尾文件名和上一级目录，便于日志阅读。
+ *
+ * 例如 `src/services/user/user-service.ts` 会展示成 `user/user-service.ts`。
  */
 function shortenPathForDisplay(filePath: string): string {
   const normalizedPath = filePath.replace(/\\/g, '/');
@@ -786,6 +911,12 @@ function shortenPathForDisplay(filePath: string): string {
 
 /**
  * 判断当前 Merge Request webhook 是否代表一次需要重新 review 的代码变更。
+ *
+ * 规则是：
+ * - `open` / `reopen` 一律触发
+ * - `update` 只有在 oldrev 或 last_commit 变化时才触发
+ *
+ * 这样可以避免纯元数据更新把 review 重复跑一遍。
  */
 function isMergeRequestUpdateWithCodeChange(body: GitLabMergeRequestWebhookPayload): boolean {
   const action = body.object_attributes?.action;

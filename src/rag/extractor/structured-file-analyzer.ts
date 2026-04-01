@@ -14,6 +14,9 @@ import { getTouchedNewLineEntries } from '../../core/review/diff-utils.js';
 export class StructuredFileAnalyzer {
   /**
    * 根据文件类型提取结构化摘要。
+   *
+   * 这里只处理“结构清晰、靠文本布局就能提取高信号信息”的文件；
+   * 代码文件的深层语义仍然交给 `CodeAnalyzer`。
    */
   analyze(filePath: string, content: string, diff: FileDiff): CodeContextSnippet[] {
     if (!content) {
@@ -44,6 +47,9 @@ export class StructuredFileAnalyzer {
 
   /**
    * 提取 YAML 类配置的关键路径和 CI 作业结构摘要。
+   *
+   * YAML 最大的问题是层级深、局部 diff 难看出全局含义，所以这里重点把“改到了哪条键路径”
+   * 和“如果它是 CI 文件，job 结构长什么样”压缩出来。
    */
   private analyzeYamlLikeFile(filePath: string, content: string, diff: FileDiff): CodeContextSnippet[] {
     const lines = content.replace(/\r\n/g, '\n').split('\n');
@@ -65,6 +71,7 @@ export class StructuredFileAnalyzer {
         continue;
       }
 
+      // 用缩进栈追踪当前键路径，足够覆盖大多数常见配置文件，不追求完整 YAML 语法解析。
       while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
         stack.pop();
       }
@@ -134,6 +141,9 @@ export class StructuredFileAnalyzer {
 
   /**
    * 提取 JSON/JSONC 配置里被改动的关键字段。
+   *
+   * 即使整份 JSON 无法成功解析，触碰到的键名摘要仍然可以保留下来，确保 review
+   * 至少知道“本次改动主要打到了哪些配置字段”。
    */
   private analyzeJsonLikeFile(filePath: string, content: string, diff: FileDiff): CodeContextSnippet[] {
     const touchedEntries = getTouchedNewLineEntries(diff);
@@ -168,6 +178,8 @@ export class StructuredFileAnalyzer {
 
   /**
    * 提取 TOML/INI/CONF/Properties 这类键值配置中的关键节和键。
+   *
+   * 这类格式通常不需要完整 AST，只要恢复 section + key 的组合路径就足够支撑 review。
    */
   private analyzeKeyValueConfigFile(filePath: string, content: string, diff: FileDiff): CodeContextSnippet[] {
     const lines = content.replace(/\r\n/g, '\n').split('\n');
@@ -209,6 +221,8 @@ export class StructuredFileAnalyzer {
 
   /**
    * 提取 Shell / Dockerfile 里的命令级结构摘要。
+   *
+   * 目标是让模型快速看到“本次变更新增或修改了哪些命令”，而不是试图理解整段脚本控制流。
    */
   private analyzeShellLikeFile(filePath: string, content: string, diff: FileDiff): CodeContextSnippet[] {
     const commands: string[] = [];
@@ -238,6 +252,9 @@ export class StructuredFileAnalyzer {
 
 }
 
+/**
+ * 判断一个路径是否属于常见 CI 配置位置。
+ */
 function normalizedIncludesCiPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/').toLowerCase();
   return normalized === '.gitlab-ci.yml'

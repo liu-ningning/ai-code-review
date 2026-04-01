@@ -126,6 +126,14 @@ const TYPED_TEST_RULE_IDS = [
   '@typescript-eslint/no-misused-promises',
 ] as const;
 
+/**
+ * 预定义的策略字典。
+ *
+ * 每个条目都同时声明：
+ * - 这类文件在产品语义上是什么
+ * - review 时要重点关注什么
+ * - 静态分析与 RAG 预算应该怎么分配
+ */
 const STRATEGIES: Record<ReviewFileKind, ReviewFileStrategy> = {
   backend_service: {
     kind: 'backend_service',
@@ -407,6 +415,8 @@ export function resolveReviewFileStrategy(filePath: string, diff?: FileDiff): Re
   const diffContent = buildDiffText(diff);
   const scriptFile = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'].includes(extension);
 
+  // 识别顺序有意从“高特异性”到“低特异性”，
+  // 这样能尽量避免普通配置或脚本文件误落到 generic。
   if (isCiPipelineFile(lowerPath, extension, diffContent)) {
     return STRATEGIES.ci_pipeline;
   }
@@ -455,6 +465,9 @@ function buildDiffText(diff?: FileDiff): string {
 
 /**
  * 判断当前文件是否更像 CI/CD 流水线配置，而不是普通 YAML。
+ *
+ * 这里除了看固定路径，还会看 diff 内容中的典型流水线关键字，
+ * 以覆盖一些非常规命名的 CI 文件。
  */
 function isCiPipelineFile(lowerPath: string, extension: string, diffContent: string): boolean {
   if (
@@ -490,6 +503,8 @@ function isCiPipelineFile(lowerPath: string, extension: string, diffContent: str
 
 /**
  * 判断当前文件是否为测试或测试支撑目录。
+ *
+ * 既看目录名，也看 `*.spec.ts` / `*.test.ts` 这种常见命名。
  */
 function isTestFile(lowerPath: string): boolean {
   return /(^|\/)(__tests__|tests?|spec|e2e|fixtures?|mocks?)(\/|$)/.test(lowerPath)
@@ -505,6 +520,8 @@ function isDocsFile(extension: string, basename: string): boolean {
 
 /**
  * 判断当前文件是否为应用配置文件。
+ *
+ * 这里偏宽松，宁愿把可疑配置识别成 app_config，也不要把它们误判成 generic。
  */
 function isAppConfigFile(lowerPath: string, basename: string, extension: string): boolean {
   if (basename === '.env' || basename.startsWith('.env.')) {
@@ -520,6 +537,8 @@ function isAppConfigFile(lowerPath: string, basename: string, extension: string)
 
 /**
  * 判断当前脚本是否更像 React 组件或页面入口。
+ *
+ * 会综合扩展名、目录路径和 diff 中出现的 React 关键片段。
  */
 function isReactComponentFile(lowerPath: string, extension: string, diffContent: string): boolean {
   if (extension === '.tsx' || extension === '.jsx') {
@@ -544,6 +563,8 @@ function isReactComponentFile(lowerPath: string, extension: string, diffContent:
 
 /**
  * 判断当前脚本是否更像前端状态、Hook 或客户端模块。
+ *
+ * 这类文件通常不是直接渲染组件，但会深度影响前端运行时状态和交互。
  */
 function isFrontendModuleFile(lowerPath: string, diffContent: string): boolean {
   if (/(^|\/)(hooks|store|state|client|ui|web)(\/|$)/.test(lowerPath)) {
@@ -564,6 +585,8 @@ function isFrontendModuleFile(lowerPath: string, diffContent: string): boolean {
 
 /**
  * 判断当前脚本是否位于请求处理、任务执行或后端服务入口路径上。
+ *
+ * 这类文件通常更靠近线上主链路，因此在 scale 和 prompt 上会更保守。
  */
 function isBackendServiceFile(lowerPath: string, diffContent: string): boolean {
   if (/(^|\/)(controllers?|services?|routes?|handlers?|api|server|jobs?|workers?|consumers?|repositories?)(\/|$)/.test(lowerPath)) {

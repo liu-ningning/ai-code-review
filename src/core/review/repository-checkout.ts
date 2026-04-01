@@ -27,7 +27,9 @@ export interface RepositoryCheckout {
  * 管理 PR 基线与 head 代码的本地镜像、checkout 和回收流程。
  */
 export class RepositoryCheckoutManager {
+  // 每个仓库一把逻辑锁，保证 mirror 刷新和 worktree 创建不会并发互踩。
   private static readonly lockTails = new Map<string, Promise<void>>();
+  // mirror 最近一次成功 fetch 的新鲜度缓存。
   private static readonly mirrorFreshnessCache = new LRUCache<string, number>({
     max: 64,
     ttl: DEFAULT_FETCH_TTL_MS,
@@ -49,6 +51,11 @@ export class RepositoryCheckoutManager {
     const repoKey = `${owner}/${repo}`;
 
     return this.withRepoLock(repoKey, async () => {
+      // checkout 流程固定为：
+      // 1. 确保 mirror 存在
+      // 2. 视情况刷新远端
+      // 3. 选择合适 ref
+      // 4. 创建 detached worktree
       await mkdir(this.cacheRoot, { recursive: true });
 
       const mirrorDir = path.join(this.cacheRoot, this.toCacheDirectoryName(repoKey));
@@ -107,6 +114,8 @@ export class RepositoryCheckoutManager {
 
   /**
    * 确保本地 mirror 仓库存在；若已存在则校正 origin 地址。
+   *
+   * 即使 mirror 已存在，也要同步 origin 地址，避免仓库域名或来源变更后继续使用旧地址。
    */
   private async ensureMirror(mirrorDir: string, repoUrl: string): Promise<void> {
     try {
@@ -144,6 +153,7 @@ export class RepositoryCheckoutManager {
 
     await this.gitClient.fetchOrigin(mirrorDir);
     RepositoryCheckoutManager.mirrorFreshnessCache.set(mirrorDir, Date.now());
+    // refresh 之后，之前的 commit presence 判断可能已经过期，需要整体清掉。
     this.clearCommitPresenceEntries(mirrorDir);
 
     if (headSha && !(await this.hasCommit(mirrorDir, headSha))) {
@@ -175,6 +185,8 @@ export class RepositoryCheckoutManager {
 
   /**
    * 选择本次 checkout 应该使用的 ref，优先 headSha，其次远端分支引用。
+   *
+   * 优先精确 headSha 能避免分支指针在 review 执行期间继续移动造成的不确定性。
    */
   private async resolveCheckoutRef(mirrorDir: string, branch: string, headSha?: string): Promise<string> {
     if (headSha && await this.hasCommit(mirrorDir, headSha)) {
@@ -209,6 +221,8 @@ export class RepositoryCheckoutManager {
 
   /**
    * 在 mirror 刷新后清理该仓库对应的提交存在性缓存。
+   *
+   * commitPresenceCache 的 key 都带 mirrorDir 前缀，因此按前缀删除即可。
    */
   private clearCommitPresenceEntries(mirrorDir: string): void {
     const keyPrefix = `${mirrorDir}:`;
@@ -221,6 +235,8 @@ export class RepositoryCheckoutManager {
 
   /**
    * 组装用于 git clone/fetch 的远端仓库地址。
+   *
+   * owner 可能本身包含 group/subgroup，需要逐段编码再拼回去。
    */
   private buildRepositoryUrl(owner: string, repo: string): string {
     const repoPath = `${owner}/${repo}`
@@ -237,6 +253,8 @@ export class RepositoryCheckoutManager {
 
   /**
    * 把仓库 key 转成适合作为本地缓存目录名的形式。
+   *
+   * 目录名只保留安全字符，避免斜杠和特殊符号破坏缓存结构。
    */
   private toCacheDirectoryName(repoKey: string): string {
     return `${repoKey.replace(/[^\w.-]+/g, '__')}.git`;
