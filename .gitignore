@@ -1,0 +1,52 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules
+
+# Optional npm cache directory
+.npm
+.pnpm-store
+
+# Optional eslint cache
+.eslintcache
+
+# Output of package manager pack
+*.tgz
+
+# Aapple
+*.DS_Store
+
+# VS Code
+.vscode
+
+# build
+build
+dist
+dist-server
+!build/dll
+
+# git
+.gitpat
+
+# other
+.env
+data/
+.DS_Store
+.env.local
+.env.*
+!.env.example
+*.DS_Store
+.vscode

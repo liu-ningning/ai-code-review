@@ -1,0 +1,47 @@
+{
+  "name": "ai-review-server",
+  "version": "1.0.0",
+  "description": "AI-powered Code Review Service",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "preinstall": "node -e \"const ua = process.env.npm_config_user_agent ?? ''; if (!ua.startsWith('pnpm/')) { console.error('This project uses pnpm. Run: pnpm install'); process.exit(1); }\"",
+    "build": "tsc",
+    "start": "node dist/entry/index.js",
+    "build:start": "pnpm build && pnpm start",
+    "dev": "tsx src/entry/index.ts",
+    "lint": "eslint 'src/**/*.ts'",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:file": "node --import tsx --test",
+    "test:typecheck": "tsc --noEmit -p tests/tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/env": "^5.0.3",
+    "@phenomnomnominal/tsquery": "^6.1.4",
+    "@typescript-eslint/eslint-plugin": "^8.57.2",
+    "@typescript-eslint/parser": "^8.57.2",
+    "axios": "^1.14.0",
+    "dependency-cruiser": "^17.3.10",
+    "diff": "8.0.4",
+    "dotenv": "^17.3.1",
+    "eslint": "10.1.0",
+    "fastify": "^5.8.4",
+    "lru-cache": "^11.2.7",
+    "openai": "^6.33.0",
+    "ts-morph": "^27.0.2",
+    "typescript": "^6.0.2",
+    "winston": "^3.19.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

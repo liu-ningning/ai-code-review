@@ -1,0 +1,36 @@
+services:
+  # Test Environment
+  ai-review-test:
+    image: ${AI_REVIEW_IMAGE_REPOSITORY:-ai-code-review}:${AI_REVIEW_TEST_IMAGE_TAG:-test}
+    container_name: ai-review-test
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env.test
+    ports:
+      - "3001:3000"
+    networks:
+      - app-network
+
+  # Production Environment
+  ai-review-prod:
+    image: ${AI_REVIEW_IMAGE_REPOSITORY:-ai-code-review}:${AI_REVIEW_PROD_IMAGE_TAG:-prod}
+    container_name: ai-review-prod
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env.prod
+    ports:
+      - "3000:3000"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    external: true

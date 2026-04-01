@@ -1,0 +1,59 @@
+# 基础镜像构建相关的变更范围。
+.base_image_changes: &base_image_changes
+  - Dockerfile.base
+  - .gitlab/ci/**/*
+  - .gitlab-ci.yml
+
+# 业务镜像构建相关的变更范围。
+.app_image_changes: &app_image_changes
+  - src/**/*
+  - package.json
+  - pnpm-lock.yaml
+  - tsconfig.json
+  - Dockerfile
+  - Dockerfile.base
+  - docker-compose.yml
+  - .gitlab/**/*
+  - .gitlab-ci.yml
+
+# 基础镜像构建任务。
+build:base-image:
+  stage: prepare
+  interruptible: true
+  before_script: []
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
+      changes: *base_image_changes
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+      changes: *base_image_changes
+  script:
+    - sh ./.gitlab/ci/build-base-image.sh
+
+# 业务镜像构建模板。
+.build_app_template:
+  stage: build
+  interruptible: true
+  before_script: []
+  script:
+    - sh ./.gitlab/ci/build-app-image.sh
+
+# 测试环境业务镜像构建任务。
+build:app:test:
+  extends: .build_app_template
+  variables:
+    IMAGE_TAG_STABLE: test
+    IMAGE_TAG_VERSION: test-${CI_COMMIT_SHORT_SHA}
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
+      changes: *app_image_changes
+
+# 生产环境业务镜像构建任务。
+build:app:prod:
+  extends: .build_app_template
+  interruptible: false
+  variables:
+    IMAGE_TAG_STABLE: prod
+    IMAGE_TAG_VERSION: prod-${CI_COMMIT_SHORT_SHA}
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+      changes: *app_image_changes

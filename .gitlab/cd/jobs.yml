@@ -1,0 +1,89 @@
+# CD 任务需要监听的应用与部署配置变更范围。
+.deploy_changes: &deploy_changes
+  - src/**/*
+  - package.json
+  - pnpm-lock.yaml
+  - tsconfig.json
+  - Dockerfile
+  - Dockerfile.base
+  - docker-compose.yml
+  - .gitlab/**/*
+  - .gitlab-ci.yml
+
+# 各部署环境共享的基础变量。
+.deploy_shared_variables: &deploy_shared_variables
+  STACK_DIR: /opt/ai-review-stack
+
+# 部署任务共用模板。
+.deploy_template:
+  stage: deploy
+  timeout: 40m
+  script:
+    - sh ./.gitlab/cd/deploy.sh
+
+# 手动回滚任务共用模板。
+.rollback_template:
+  stage: rollback
+  timeout: 40m
+  when: manual
+  allow_failure: true
+  script:
+    - sh ./.gitlab/cd/rollback.sh
+
+# 测试环境部署任务。
+deploy:test:
+  extends: .deploy_template
+  needs: ["build:app:test"]
+  resource_group: ai-review-deploy-test
+  interruptible: true
+  variables:
+    <<: *deploy_shared_variables
+    DEPLOY_TARGET: test
+    CONTAINER_NAME: ai-review-test
+    ENV_KEY: AI_REVIEW_TEST_IMAGE_TAG
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
+      changes: *deploy_changes
+
+# 生产环境部署任务。
+deploy:prod:
+  extends: .deploy_template
+  needs: ["build:app:prod"]
+  resource_group: ai-review-deploy-prod
+  interruptible: false
+  variables:
+    <<: *deploy_shared_variables
+    DEPLOY_TARGET: prod
+    CONTAINER_NAME: ai-review-prod
+    ENV_KEY: AI_REVIEW_PROD_IMAGE_TAG
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+      changes: *deploy_changes
+
+# 测试环境手动回滚任务。
+rollback:test:
+  extends: .rollback_template
+  resource_group: ai-review-deploy-test
+  interruptible: false
+  variables:
+    <<: *deploy_shared_variables
+    DEPLOY_TARGET: test
+    CONTAINER_NAME: ai-review-test
+    ENV_KEY: AI_REVIEW_TEST_IMAGE_TAG
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+      when: manual
+
+# 生产环境手动回滚任务。
+rollback:prod:
+  extends: .rollback_template
+  resource_group: ai-review-deploy-prod
+  interruptible: false
+  variables:
+    <<: *deploy_shared_variables
+    DEPLOY_TARGET: prod
+    CONTAINER_NAME: ai-review-prod
+    ENV_KEY: AI_REVIEW_PROD_IMAGE_TAG
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual

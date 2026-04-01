@@ -1,0 +1,25 @@
+stages:
+  - prepare
+  - build
+  - deploy
+  - rollback
+
+include:
+  - local: .gitlab/ci/jobs.yml
+  - local: .gitlab/cd/jobs.yml
+
+variables:
+  BASE_IMAGE_REPOSITORY: works/ai-code-review
+  BASE_IMAGE_TAG: base-node24-bookworm-git-pnpm10
+  APP_IMAGE_REPOSITORY: works/ai-code-review
+  NODE_BASE_IMAGE: node:24-bookworm-slim
+  PNPM_VERSION: 10.33.0
+  DEBIAN_MIRROR_HOST: mirrors.ustc.edu.cn
+  NPM_REGISTRY: https://registry.npmmirror.com
+
+default:
+  tags:
+    - ai-tools
+  image: alpine:3.20
+  before_script:
+    - sh ./.gitlab/cd/setup-runner-ssh.sh
