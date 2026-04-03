@@ -308,7 +308,7 @@ export class ReviewPipeline {
             });
           } catch (error: unknown) {
             const errorMessage = getErrorMessage(error);
-            logger.error(`Failed to review file: ${fileDiff.path}`, errorMessage);
+            logger.error(`❌ Failed to review file: ${fileDiff.path}`, errorMessage);
             reviewErrors.push({ path: fileDiff.path, message: errorMessage });
             completedFiles += 1;
             await this.emitProgress('file_review_failed', `Failed to review file ${fileDiff.path}`, {
@@ -377,7 +377,7 @@ export class ReviewPipeline {
       };
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error);
-      logger.error(`Review pipeline failed for ${targetLabel} in ${owner}/${repo}`, errorMessage);
+      logger.error(`❌ Review pipeline failed for ${targetLabel} in ${owner}/${repo}`, errorMessage);
       await this.emitProgress('failed', `Review pipeline failed for ${targetLabel}`, {
         error: errorMessage,
       });
@@ -496,14 +496,14 @@ export class ReviewPipeline {
       }
 
       if (agentResults.some((result) => result.status === 'rejected')) {
-        logger.warn(`One or more reviewer agents failed for ${diff.path} segment ${segmentIndex + 1}/${reviewSegments.length}, continuing with remaining agents/segments.`);
+        logger.warn(`⚠️ One or more reviewer agents failed for ${diff.path} segment ${segmentIndex + 1}/${reviewSegments.length}, continuing with remaining agents/segments.`);
       }
     }
 
     if (collectedComments.length === 0) {
       // 如果模型没产出任何评论，但静态规则已有明确发现，则至少返回静态发现。
       if (staticFindings.length > 0) {
-        logger.warn(`LLM review failed for ${diff.path}, returning static findings only.`);
+        logger.warn(`⚠️ LLM review failed for ${diff.path}, returning static findings only.`);
         return staticFindings.map((finding) => ({
           ...finding,
           oldPath: diff.oldPath || finding.oldPath,

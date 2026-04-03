@@ -201,7 +201,7 @@ export class GitHubProvider implements ISCMProvider {
         return '';
       }
 
-      logger.error(`Failed to fetch GitHub file content: ${filePath}@${ref}`, {
+      logger.error(`❌ Failed to fetch GitHub file content: ${filePath}@${ref}`, {
         error: getErrorMessage(error),
         statusCode,
       });
@@ -248,7 +248,7 @@ export class GitHubProvider implements ISCMProvider {
 
       return Array.from(results);
     } catch (error: unknown) {
-      logger.error(`GitHub search failed for: ${query}`, {
+      logger.error(`❌ GitHub search failed for: ${query}`, {
         error: getErrorMessage(error),
       });
       return [];
@@ -269,7 +269,7 @@ export class GitHubProvider implements ISCMProvider {
         name: payload.name,
       };
     } catch (error: unknown) {
-      logger.warn(`Failed to create GitHub review status for ${metadata.owner}/${metadata.repo}`, {
+      logger.warn(`⚠️ Failed to create GitHub review status for ${metadata.owner}/${metadata.repo}`, {
         error: getErrorMessage(error),
       });
       return null;
@@ -284,7 +284,7 @@ export class GitHubProvider implements ISCMProvider {
     try {
       await this.setCommitStatus(metadata, checkRun.name || 'AI Review', payload);
     } catch (error: unknown) {
-      logger.warn(`Failed to update GitHub review status for ${metadata.owner}/${metadata.repo}`, {
+      logger.warn(`⚠️ Failed to update GitHub review status for ${metadata.owner}/${metadata.repo}`, {
         error: getErrorMessage(error),
       });
     }
@@ -461,7 +461,7 @@ export class GitHubProvider implements ISCMProvider {
         postedCount += 1;
       } catch (error: unknown) {
         failedCount += 1;
-        logger.warn(`Failed to post GitHub PR comment for ${target.owner}/${target.repo}#${target.number}`, {
+        logger.warn(`⚠️ Failed to post GitHub PR comment for ${target.owner}/${target.repo}#${target.number}`, {
           error: getErrorMessage(error),
           line: comment.line,
           path: comment.path,
@@ -512,7 +512,7 @@ export class GitHubProvider implements ISCMProvider {
           postedCount += 1;
         } catch (fallbackError: unknown) {
           failedCount += 1;
-          logger.warn(`Failed to post GitHub commit comment for ${target.owner}/${target.repo}@${target.headSha}`, {
+          logger.warn(`⚠️ Failed to post GitHub commit comment for ${target.owner}/${target.repo}@${target.headSha}`, {
             error: getErrorMessage(fallbackError),
             line: comment.line,
             path: comment.path,
@@ -637,7 +637,7 @@ export class GitHubProvider implements ISCMProvider {
         deletedCount += 1;
       } catch (error: unknown) {
         failedCount += 1;
-        logger.warn('Failed to delete stale GitHub AI comment', {
+        logger.warn('⚠️ Failed to delete stale GitHub AI comment', {
           error: getErrorMessage(error),
           commentId: comment.id,
         });
@@ -670,7 +670,7 @@ export class GitHubProvider implements ISCMProvider {
       const { data } = await this.client.get<GitHubCurrentUserResponse>('/user');
       return data;
     } catch (error: unknown) {
-      logger.warn('Failed to fetch current GitHub user for AI comment cleanup', {
+      logger.warn('⚠️ Failed to fetch current GitHub user for AI comment cleanup', {
         error: getErrorMessage(error),
       });
       return null;

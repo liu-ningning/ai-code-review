@@ -132,7 +132,7 @@ export class OpenAIProvider {
 
         if (retryable && hasRetryBudget) {
           const delayMs = this.getRetryDelayMs(error, attempt);
-          logger.warn('LLM request failed with a retryable error; retrying review generation', {
+          logger.warn('⚠️ LLM request failed with a retryable error; retrying review generation', {
             filePath,
             model: this.model,
             attempt: attempt + 1,
@@ -144,7 +144,7 @@ export class OpenAIProvider {
           continue;
         }
 
-        logger.error('OpenAI SDK calling failed', {
+        logger.error('❌ OpenAI SDK calling failed', {
           error: errorMessage,
           filePath,
           model: this.model,
@@ -169,7 +169,7 @@ export class OpenAIProvider {
       const rawPayload = this.parseJsonPayload(content);
       const parsedPayload = reviewPayloadSchema.safeParse(rawPayload);
       if (!parsedPayload.success) {
-        logger.error('Failed to validate LLM response schema', {
+        logger.error('❌ Failed to validate LLM response schema', {
           issues: parsedPayload.error.issues,
           content,
         });
@@ -203,7 +203,7 @@ export class OpenAIProvider {
       if (error instanceof LLMError) {
         throw error;
       }
-      logger.error('Failed to parse LLM response as JSON', { content });
+      logger.error('❌ Failed to parse LLM response as JSON', { content });
       throw new LLMError(`LLM returned invalid JSON for ${filePath}`, error);
     }
   }

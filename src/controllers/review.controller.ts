@@ -139,7 +139,7 @@ export function registerReviewController(
 
     // 如果配置了 webhook secret，这里会做最小校验。
     if (!verifyGitLabWebhook(request)) {
-      logger.warn('Invalid GitLab webhook token detected');
+      logger.warn('⚠️ Invalid GitLab webhook token detected');
       return reply.status(401).send({ error: 'Unauthorized' });
     }
 
@@ -165,7 +165,7 @@ export function registerReviewController(
 
     // owner / repo / MR 编号 / head sha 是后续调度最基本的四元组。
     if (!projectPath || !mrNumber || !headSha) {
-      logger.warn('GitLab merge request webhook payload is missing required fields', {
+      logger.warn('⚠️ GitLab merge request webhook payload is missing required fields', {
         hasProjectPath: Boolean(projectPath),
         mrNumber,
         hasHeadSha: Boolean(headSha),
@@ -206,7 +206,7 @@ export function registerReviewController(
     }
 
     if (!config.CI_REVIEW_TOKEN) {
-      logger.warn('CI review endpoint was called without CI_REVIEW_TOKEN configured');
+      logger.warn('⚠️ CI review endpoint was called without CI_REVIEW_TOKEN configured');
       return reply.status(503).send({ error: 'CI review token is not configured' });
     }
 

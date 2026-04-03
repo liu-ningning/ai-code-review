@@ -120,18 +120,18 @@ const start = async () => {
     // 这里的告警更多是“运行后一定会拒绝请求”的早期提醒，
     // 便于在启动日志里直接发现配置缺失。
     if (config.SCM_TYPE === 'github' && !config.GITHUB_TOKEN) {
-      logger.warn('GITHUB_TOKEN is not configured. CI review endpoints will reject GitHub review requests.');
+      logger.warn('⚠️ GITHUB_TOKEN is not configured. CI review endpoints will reject GitHub review requests.');
     }
 
     if (config.SCM_TYPE === 'gitlab' && !config.GITLAB_TOKEN) {
-      logger.warn('GITLAB_TOKEN is not configured. Webhook and CI review endpoints will reject requests.');
+      logger.warn('⚠️ GITLAB_TOKEN is not configured. Webhook and CI review endpoints will reject requests.');
     }
 
     logger.info(`SCM mode: ${config.SCM_TYPE}`);
     logger.info(`AI Review Server is running at http://localhost:${port}`);
   } catch (err) {
     // 启动失败时直接退出进程，让容器编排或进程管理器接管重启/告警。
-    logger.error('Failed to start server', err);
+    logger.error('❌ Failed to start server', err);
     process.exit(1);
   }
 };

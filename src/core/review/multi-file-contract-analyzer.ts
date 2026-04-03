@@ -83,7 +83,7 @@ export class MultiFileContractAnalyzer {
   /**
    * 创建多文件契约分析器，并绑定 SCM provider 以读取基线版本文件。
    */
-  constructor(private readonly scmProvider: ISCMProvider) {}
+  constructor(private readonly scmProvider: ISCMProvider) { }
 
   /**
    * 分析脚本文件导出契约的变更，并检查改动中的调用方是否已经同步迁移。
@@ -1020,7 +1020,7 @@ export class MultiFileContractAnalyzer {
         return null;
       }
 
-      logger.warn(`Failed to read contract baseline from git ref: ${filePath}@${this.analysisBaselineRef}`, {
+      logger.warn(`⚠️ Failed to read contract baseline from git ref: ${filePath}@${this.analysisBaselineRef}`, {
         error: getErrorMessage(error),
       });
       return null;

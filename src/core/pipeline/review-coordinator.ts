@@ -40,7 +40,7 @@ export class ReviewCoordinator {
   // runExclusive 使用的 promise 链尾，保证同 key 顺序执行。
   private readonly exclusiveExecutions = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly options: ReviewCoordinatorOptions) {}
+  constructor(private readonly options: ReviewCoordinatorOptions) { }
 
   async initialize(): Promise<void> {
     logger.info('Review coordinator is using in-memory scheduling.');
@@ -78,7 +78,7 @@ export class ReviewCoordinator {
           logger.info(`Full Review Cycle completed for ${reviewKey} at ${nextHeadSha}`);
         }
       } catch (error: unknown) {
-        logger.error(`Pipeline execution failed for ${reviewKey}: ${getErrorMessage(error)}`, error);
+        logger.error(`❌ Pipeline execution failed for ${reviewKey}: ${getErrorMessage(error)}`, error);
       } finally {
         this.activeReviews.delete(reviewKey);
 

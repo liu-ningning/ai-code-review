@@ -157,7 +157,7 @@ export class CodeAnalyzer {
         chunks: group.chunks,
       }));
     } catch (error: unknown) {
-      logger.warn(`semantic diff segmentation failed for ${filePath}, falling back to line-gap split: ${CodeAnalyzer.getErrorMessage(error)}`);
+      logger.warn(`⚠️ Semantic diff segmentation failed for ${filePath}, falling back to line-gap split: ${CodeAnalyzer.getErrorMessage(error)}`);
       return fallbackSegments;
     }
   }
@@ -176,7 +176,7 @@ export class CodeAnalyzer {
       // 在内存中载入文件
       sourceFile = this.project.createSourceFile(filePath, content, { overwrite: true });
     } catch (e) {
-      logger.error(`Failed to parse file: ${filePath}`, e);
+      logger.error(`❌ Failed to parse file: ${filePath}`, e);
       return [];
     }
 
@@ -326,7 +326,7 @@ export class CodeAnalyzer {
         semanticSlices,
       };
     } catch (error: unknown) {
-      logger.warn(`tsquery analysis failed for ${filePath}, falling back to heuristic extraction: ${CodeAnalyzer.getErrorMessage(error)}`);
+      logger.warn(`⚠️ tsquery analysis failed for ${filePath}, falling back to heuristic extraction: ${CodeAnalyzer.getErrorMessage(error)}`);
       return { identifiers: fallbackIdentifiers, localSymbols: [], semanticSlices: [] };
     }
   }
@@ -365,7 +365,7 @@ export class CodeAnalyzer {
 
       return contexts;
     } catch (error: unknown) {
-      logger.warn(`removed scope analysis failed for ${filePath}: ${CodeAnalyzer.getErrorMessage(error)}`);
+      logger.warn(`⚠️ removed scope analysis failed for ${filePath}: ${CodeAnalyzer.getErrorMessage(error)}`);
       return [];
     }
   }

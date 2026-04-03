@@ -243,7 +243,7 @@ export class GitLabProvider implements ISCMProvider {
         return '';
       }
 
-      logger.error(`Failed to fetch file content: ${path}@${ref}`, {
+      logger.error(`❌ Failed to fetch file content: ${path}@${ref}`, {
         error: errorMessage,
         statusCode,
       });
@@ -297,7 +297,7 @@ export class GitLabProvider implements ISCMProvider {
 
       return Array.from(results);
     } catch (error: unknown) {
-      logger.error(`GitLab search failed for: ${query}`, {
+      logger.error(`❌ GitLab search failed for: ${query}`, {
         error: getErrorMessage(error),
       });
       return [];
@@ -319,7 +319,7 @@ export class GitLabProvider implements ISCMProvider {
         name: payload.name,
       };
     } catch (error: unknown) {
-      logger.warn(`Failed to create GitLab review status for ${metadata.owner}/${metadata.repo}`, {
+      logger.warn(`⚠️ Failed to create GitLab review status for ${metadata.owner}/${metadata.repo}`, {
         error: getErrorMessage(error),
       });
       return null;
@@ -337,7 +337,7 @@ export class GitLabProvider implements ISCMProvider {
     try {
       await this.setCommitStatus(metadata, checkRun.name || 'AI Review', payload);
     } catch (error: unknown) {
-      logger.warn(`Failed to update GitLab review status for ${metadata.owner}/${metadata.repo}`, {
+      logger.warn(`⚠️ Failed to update GitLab review status for ${metadata.owner}/${metadata.repo}`, {
         error: getErrorMessage(error),
       });
     }
@@ -494,7 +494,7 @@ export class GitLabProvider implements ISCMProvider {
       );
 
       if (data.compare_timeout) {
-        logger.warn(`GitLab compare timed out for ${target.owner}/${target.repo}`, {
+        logger.warn(`⚠️ GitLab compare timed out for ${target.owner}/${target.repo}`, {
           baseSha,
           headSha: target.headSha,
         });
@@ -557,7 +557,7 @@ export class GitLabProvider implements ISCMProvider {
         successCount++;
       } catch (error: unknown) {
         failedCount += 1;
-        logger.warn(`Failed to post GitLab MR comment for ${target.owner}/${target.repo}!${target.number}`, {
+        logger.warn(`⚠️ Failed to post GitLab MR comment for ${target.owner}/${target.repo}!${target.number}`, {
           error: getErrorMessage(error),
           line: comment.line,
           path: comment.path,
@@ -598,7 +598,7 @@ export class GitLabProvider implements ISCMProvider {
         successCount++;
       } catch (error: unknown) {
         failedCount += 1;
-        logger.warn(`Failed to post GitLab commit comment for ${target.owner}/${target.repo}@${target.headSha}`, {
+        logger.warn(`⚠️ Failed to post GitLab commit comment for ${target.owner}/${target.repo}@${target.headSha}`, {
           error: getErrorMessage(error),
           line: comment.line,
           path: comment.path,
@@ -635,7 +635,7 @@ export class GitLabProvider implements ISCMProvider {
           removedCount += 1;
         } catch (error: unknown) {
           failedCount += 1;
-          logger.warn(`Failed to delete stale GitLab MR AI comment for ${target.owner}/${target.repo}!${target.number}`, {
+          logger.warn(`⚠️ Failed to delete stale GitLab MR AI comment for ${target.owner}/${target.repo}!${target.number}`, {
             error: getErrorMessage(error),
             discussionId: candidate.discussionId,
             noteId,
@@ -654,7 +654,7 @@ export class GitLabProvider implements ISCMProvider {
           outdatedCount += 1;
         } catch (error: unknown) {
           failedCount += 1;
-          logger.warn(`Failed to mark stale GitLab MR AI comment as outdated for ${target.owner}/${target.repo}!${target.number}`, {
+          logger.warn(`⚠️ Failed to mark stale GitLab MR AI comment as outdated for ${target.owner}/${target.repo}!${target.number}`, {
             error: getErrorMessage(error),
             discussionId: candidate.discussionId,
             noteId: staleNote.id,
@@ -699,7 +699,7 @@ export class GitLabProvider implements ISCMProvider {
           removedCount += 1;
         } catch (error: unknown) {
           failedCount += 1;
-          logger.warn(`Failed to delete stale GitLab commit AI comment for ${target.owner}/${target.repo}@${target.headSha}`, {
+          logger.warn(`⚠️ Failed to delete stale GitLab commit AI comment for ${target.owner}/${target.repo}@${target.headSha}`, {
             error: getErrorMessage(error),
             discussionId: candidate.discussionId,
             noteId,
@@ -718,7 +718,7 @@ export class GitLabProvider implements ISCMProvider {
           outdatedCount += 1;
         } catch (error: unknown) {
           failedCount += 1;
-          logger.warn(`Failed to mark stale GitLab commit AI comment as outdated for ${target.owner}/${target.repo}@${target.headSha}`, {
+          logger.warn(`⚠️ Failed to mark stale GitLab commit AI comment as outdated for ${target.owner}/${target.repo}@${target.headSha}`, {
             error: getErrorMessage(error),
             discussionId: candidate.discussionId,
             noteId: staleNote.id,
@@ -865,7 +865,7 @@ export class GitLabProvider implements ISCMProvider {
       const { data } = await this.client.get<GitLabCurrentUserResponse>('/user');
       return data;
     } catch (error: unknown) {
-      logger.warn('Failed to fetch current GitLab user for AI comment cleanup', {
+      logger.warn('⚠️ Failed to fetch current GitLab user for AI comment cleanup', {
         error: getErrorMessage(error),
       });
       return null;

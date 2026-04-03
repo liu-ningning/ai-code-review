@@ -80,7 +80,7 @@ export class RepositoryCheckoutManager {
           try {
             await this.gitClient.removeWorktree(mirrorDir, checkoutDir);
           } catch (error: unknown) {
-            logger.warn(`Failed to remove worktree for ${repoKey}: ${getErrorMessage(error)}`);
+            logger.warn(`⚠️ Failed to remove worktree for ${repoKey}: ${getErrorMessage(error)}`);
           }
 
           await rm(checkoutDir, { force: true, recursive: true });
