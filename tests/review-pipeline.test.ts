@@ -114,8 +114,10 @@ test('skips checkout and comment sync when diff filtering leaves no reviewable f
 test('limits concurrent LLM calls independently from file workers', async () => {
   const originalFileConcurrency = config.REVIEW_FILE_CONCURRENCY;
   const originalLlmConcurrency = config.LLM_REVIEW_CONCURRENCY;
+  const originalReviewAgentProfiles = config.REVIEW_AGENT_PROFILES;
   config.REVIEW_FILE_CONCURRENCY = 3;
   config.LLM_REVIEW_CONCURRENCY = 1;
+  config.REVIEW_AGENT_PROFILES = 'correctness,security,regression';
 
   let activeLlmCalls = 0;
   let maxActiveLlmCalls = 0;
@@ -215,6 +217,119 @@ test('limits concurrent LLM calls independently from file workers', async () => 
   } finally {
     config.REVIEW_FILE_CONCURRENCY = originalFileConcurrency;
     config.LLM_REVIEW_CONCURRENCY = originalLlmConcurrency;
+    config.REVIEW_AGENT_PROFILES = originalReviewAgentProfiles;
+  }
+});
+
+test('runs multiple reviewer agents and merges their comments per file', async () => {
+  const originalReviewAgentProfiles = config.REVIEW_AGENT_PROFILES;
+  config.REVIEW_AGENT_PROFILES = 'correctness,security,regression';
+
+  const metadata: PullRequestMetadata = {
+    id: 'mr-3',
+    title: 'Harden controller flow',
+    description: '',
+    htmlUrl: 'https://example.com/mr/3',
+    owner: 'owner',
+    repo: 'repo',
+    sourceBranch: 'feature',
+    headSha: 'head-sha',
+    targetBranch: 'main',
+    author: 'tester',
+    kind: 'merge_request',
+    displayId: '!3',
+    baseSha: 'base-sha',
+  };
+  const provider: ISCMProvider = {
+    async getReviewMetadata(): Promise<PullRequestMetadata> {
+      return metadata;
+    },
+    async getDiff(): Promise<FileDiff[]> {
+      return [buildConfigDiff('src/app/controller.ts')];
+    },
+    async postComments(
+      _target: ReviewTarget,
+      _loadedMetadata: PullRequestMetadata,
+      comments: ReviewComment[]
+    ): Promise<ReviewCommentSyncResult> {
+      return {
+        attemptedCount: comments.length,
+        postedCount: comments.length,
+        deletedCount: 0,
+        outdatedCount: 0,
+        failedCount: 0,
+      };
+    },
+    async getFileContent(): Promise<string> {
+      return 'export async function handle(input: Input) { return authorize(input); }';
+    },
+    async searchCode(): Promise<string[]> {
+      return [];
+    },
+    async createReviewStatus(): Promise<ReviewCheckRun | null> {
+      return { id: 3, name: 'AI Review' };
+    },
+    async updateReviewStatus(): Promise<void> {},
+  };
+
+  const pipeline = new ReviewPipeline(provider);
+  const pipelineInternals = pipeline as unknown as {
+    llmProvider: {
+      generateReview: (prompt: string, filePath: string) => Promise<ReviewComment[]>;
+    };
+    checkoutManager: {
+      checkout: () => Promise<{ rootDir: string; cleanup: () => Promise<void> }>;
+    };
+  };
+
+  pipelineInternals.llmProvider = {
+    generateReview: async (prompt: string, filePath: string) => {
+      if (prompt.includes('Correctness Agent')) {
+        return [{
+          path: filePath,
+          line: 2,
+          body: '**[correctness]** missing error handling',
+          side: 'RIGHT',
+        }];
+      }
+
+      if (prompt.includes('Security Agent')) {
+        return [{
+          path: filePath,
+          line: 3,
+          body: '**[security]** input validation is incomplete',
+          side: 'RIGHT',
+        }];
+      }
+
+      return [{
+        path: filePath,
+        line: 4,
+        body: '**[regression]** removed fallback may break callers',
+        side: 'RIGHT',
+      }];
+    },
+  };
+  pipelineInternals.checkoutManager = {
+    checkout: async () => ({
+      rootDir: process.cwd(),
+      cleanup: async () => {},
+    }),
+  };
+
+  try {
+    const result = await pipeline.run({
+      kind: 'merge_request',
+      owner: 'owner',
+      repo: 'repo',
+      number: 3,
+    });
+
+    assert.equal(result.comments.length, 3);
+    assert.equal(result.commentSync.postedCount, 3);
+    assert.match(result.comments[0]?.body ?? '', /\[correctness\]|\[security\]|\[regression\]/);
+  } finally {
+    config.REVIEW_AGENT_PROFILES = originalReviewAgentProfiles;
   }
 });
 

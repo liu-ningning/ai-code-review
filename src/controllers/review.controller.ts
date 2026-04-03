@@ -487,6 +487,17 @@ function buildReviewResponsePayload(result: ReviewRunResult, requestId: string):
   reviewedFileCount: number;
   errorCount: number;
   findings: string[];
+  tokenUsagePrompt: number;
+  tokenUsageCompletion: number;
+  tokenUsageTotal: number;
+  comments: Array<{
+    path: string;
+    line: number;
+    body: string;
+    side: 'LEFT' | 'RIGHT';
+    agentId?: string;
+    agentLabel?: string;
+  }>;
 } {
   return {
     review: result.metadata.displayId,
@@ -500,6 +511,17 @@ function buildReviewResponsePayload(result: ReviewRunResult, requestId: string):
     reviewedFileCount: result.reviewedFileCount,
     errorCount: result.errorCount,
     findings: buildFindingPreview(result.comments),
+    tokenUsagePrompt: result.tokenUsage.promptTokens,
+    tokenUsageCompletion: result.tokenUsage.completionTokens,
+    tokenUsageTotal: result.tokenUsage.totalTokens,
+    comments: result.comments.map((comment) => ({
+      path: comment.path,
+      line: comment.line,
+      body: comment.body,
+      side: comment.side,
+      agentId: comment.agentId,
+      agentLabel: comment.agentLabel,
+    })),
   };
 }
 
@@ -547,11 +569,17 @@ function decorateProgressEventForStream(
   const riskScore = readNumberField(data, 'riskScore');
   const fileConcurrency = readNumberField(data, 'fileConcurrency');
   const llmConcurrency = readNumberField(data, 'llmConcurrency');
+  const reviewerAgentCount = readNumberField(data, 'reviewerAgentCount');
   const scale = readStringField(data, 'scale');
   const displayId = readStringField(data, 'displayId');
   const targetLabel = readStringField(data, 'targetLabel');
   const conclusion = readStringField(data, 'conclusion');
   const error = readStringField(data, 'error');
+  const agentId = readStringField(data, 'agentId');
+  const agentLabel = readStringField(data, 'agentLabel');
+  const segmentIndex = readNumberField(data, 'segmentIndex');
+  const totalSegments = readNumberField(data, 'totalSegments');
+  const agentCommentCount = readNumberField(data, 'agentCommentCount') ?? 0;
   const shortPath = pathValue ? shortenPathForDisplay(pathValue) : undefined;
 
   // 把每次事件里零散出现的统计字段回填到 state，
@@ -614,7 +642,7 @@ function decorateProgressEventForStream(
       state.completedFiles = 0;
       return {
         ...event,
-        message: `🔍 开始评审，共 ${total ?? 0} 个文件，文件并发 ${fileConcurrency ?? 1} / LLM 并发 ${llmConcurrency ?? fileConcurrency ?? 1}`,
+        message: `🔍 开始评审，共 ${total ?? 0} 个文件，review agent ${reviewerAgentCount ?? 1} 个，文件并发 ${fileConcurrency ?? 1} / LLM 并发 ${llmConcurrency ?? fileConcurrency ?? 1}`,
         emoji: '🔍',
         progress: buildStreamProgressMetrics(0, total),
       };
@@ -623,6 +651,30 @@ function decorateProgressEventForStream(
         ...event,
         message: `🔍 正在评审 ${index ?? completed + 1}/${total ?? 0}：${shortPath || pathValue || '当前文件'}`,
         emoji: '🔍',
+        progress: buildStreamProgressMetrics(completed, total),
+      };
+    case 'agent_review_started':
+      return {
+        ...event,
+        message: `🧠 ${agentLabel || agentId || 'Agent'} 正在审查 ${shortPath || pathValue || '当前文件'}`
+          + (segmentIndex && totalSegments && totalSegments > 1 ? `（段 ${segmentIndex}/${totalSegments}）` : ''),
+        emoji: '🧠',
+        progress: buildStreamProgressMetrics(completed, total),
+      };
+    case 'agent_review_completed':
+      return {
+        ...event,
+        message: `🧠 ${agentLabel || agentId || 'Agent'} 完成 ${shortPath || pathValue || '当前文件'}`
+          + (segmentIndex && totalSegments && totalSegments > 1 ? `（段 ${segmentIndex}/${totalSegments}）` : '')
+          + `，产出 ${agentCommentCount} 条评论`,
+        emoji: '🧠',
+        progress: buildStreamProgressMetrics(completed, total),
+      };
+    case 'agent_review_failed':
+      return {
+        ...event,
+        message: `⚠️ ${agentLabel || agentId || 'Agent'} 审查 ${shortPath || pathValue || '当前文件'} 失败，${error || '将继续其他 agent'}`,
+        emoji: '⚠️',
         progress: buildStreamProgressMetrics(completed, total),
       };
     case 'file_review_completed':

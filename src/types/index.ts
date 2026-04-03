@@ -112,6 +112,8 @@ export interface ReviewComment {
   line: number;
   body: string;
   side: 'LEFT' | 'RIGHT';
+  agentId?: string;
+  agentLabel?: string;
 }
 
 /**
@@ -135,6 +137,15 @@ export interface ReviewCommentSyncResult {
   deletedCount: number;
   outdatedCount: number;
   failedCount: number;
+}
+
+/**
+ * 汇总一次 review 运行内所有 LLM 调用的 token 使用量。
+ */
+export interface TokenUsageSummary {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 }
 
 /**
@@ -244,6 +255,7 @@ export interface ReviewRunResult {
   reviewedFileCount: number;
   errorCount: number;
   commentSync: ReviewCommentSyncResult;
+  tokenUsage: TokenUsageSummary;
 }
 
 /**
@@ -259,6 +271,9 @@ export type ReviewProgressStage =
   | 'static_analysis_completed'
   | 'review_started'
   | 'file_review_started'
+  | 'agent_review_started'
+  | 'agent_review_completed'
+  | 'agent_review_failed'
   | 'file_review_completed'
   | 'file_review_failed'
   | 'posting_comments'

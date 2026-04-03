@@ -345,6 +345,7 @@ GitLab 模式额外需要：
 | `GITLAB_WEBHOOK_SECRET` | 空 | GitLab webhook 校验 secret |
 | `OPENAI_MODEL` | `mimo-v2-flash` | 使用的模型名 |
 | `LLM_BASE_URL` | `https://api.xiaomimimo.com/v1` | OpenAI 兼容接口地址 |
+| `REVIEW_AGENT_PROFILES` | `correctness,security,regression` | 启用的 reviewer agent 列表，多个值用逗号分隔 |
 | `LLM_REVIEW_CONCURRENCY` | `2` | 发给 LLM 的实际并发数，上限会被文件并发数和待 review 文件数收敛 |
 | `LLM_TIMEOUT_MS` | `30000` | 单次 LLM 请求超时时间 |
 | `LLM_MAX_RETRIES` | `2` | LLM 瞬时失败时的最大重试次数，仅对超时、429、5xx 等重试 |
@@ -371,8 +372,10 @@ CI_REVIEW_TOKEN=your-ci-review-token
 OPENAI_API_KEY=sk-xxxxxxxx
 OPENAI_MODEL=mimo-v2-flash
 LLM_BASE_URL=https://api.xiaomimimo.com/v1
+REVIEW_AGENT_PROFILES=correctness,security,regression
 
 REVIEW_FILE_CONCURRENCY=2
+LLM_REVIEW_CONCURRENCY=2
 REVIEW_FAIL_ON_COMMENTS=true
 MAX_RAG_HOPS=1
 ```

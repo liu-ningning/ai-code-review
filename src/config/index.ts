@@ -34,6 +34,7 @@ const configSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().default(30000),
   LLM_MAX_RETRIES: z.coerce.number().default(2),
   LLM_RETRY_BASE_DELAY_MS: z.coerce.number().default(1000),
+  REVIEW_AGENT_PROFILES: z.string().default('correctness,security,regression'),
 
   // RAG & Budget
   MAX_FILE_TOKEN_BUDGET: z.coerce.number().default(4000),

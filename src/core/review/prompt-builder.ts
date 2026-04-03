@@ -6,6 +6,7 @@
  */
 import { CodeContext, FileDiff, PullRequestMetadata } from '../../types/index.js';
 import { ReviewFileStrategy } from './file-review-strategy.js';
+import { ReviewAgentProfile } from './review-agent-profiles.js';
 
 interface ContextBlock {
   label: string;
@@ -20,6 +21,7 @@ export interface PromptBuildOptions {
   strategy: ReviewFileStrategy;
   segmentIndex?: number;
   totalSegments?: number;
+  agent: ReviewAgentProfile;
 }
 
 /**
@@ -55,65 +57,73 @@ export class PromptBuilder {
     const reviewScope = this.formatReviewScope(diff, options);
     const diffSection = this.formatDiffSection(diff);
     const fileChecklist = this.formatFileChecklist(options.strategy);
+    const agentChecklist = this.formatAgentChecklist(options.agent);
 
     return `
-# 角色设定
-你是一名拥有 10+ 年经验的资深工程师，负责做高信号代码评审。请重点识别会影响运行时行为、稳定性、安全性、并发一致性或发布安全的真实问题。
+      # 角色设定
+      你是一名拥有 10+ 年经验的资深工程师，负责做高信号代码评审。请重点识别会影响运行时行为、稳定性、安全性、并发一致性或发布安全的真实问题。
 
-# 上下文信息
-## 1. 评审对象
-- 评审对象: ${pr.displayId}
-- 标题: ${pr.title}
-- 背景/描述: ${pr.description}
+      ## 当前 Reviewer Agent
+      - Agent: ${options.agent.label}
+      - Agent 关注面: ${options.agent.focus}
 
-## 2. 当前文件与评审范围
-${reviewScope}
+      # 上下文信息
+      ## 1. 评审对象
+      - 评审对象: ${pr.displayId}
+      - 标题: ${pr.title}
+      - 背景/描述: ${pr.description}
 
-## 3. 高置信度静态 / 变更影响信号
-${signalContext}
+      ## 2. 当前文件与评审范围
+      ${reviewScope}
 
-## 4. 语义切片与结构化摘要
-${semanticSliceContext}
+      ## 3. 高置信度静态 / 变更影响信号
+      ${signalContext}
 
-## 5. 外部关联代码 (RAG Context)
-${codeContext}
+      ## 4. 语义切片与结构化摘要
+      ${semanticSliceContext}
 
-## 6. 被删除或削弱的旧逻辑
-${removedScopeContext}
+      ## 5. 外部关联代码 (RAG Context)
+      ${codeContext}
 
-## 7. 待评审的变更
-${diffSection}
+      ## 6. 被删除或削弱的旧逻辑
+      ${removedScopeContext}
 
-# 文件类型专项关注
-${fileChecklist}
+      ## 7. 待评审的变更
+      ${diffSection}
 
-# 通用审查底线
-- 安全: 避免鉴权绕过、注入风险、XSS、敏感信息泄露、不安全配置放宽。
-- 逻辑: 检查边界条件、异常处理、状态同步、资源释放、错误分支和回滚路径。
-- 性能: 避免高频循环内耗时操作、无意义串行 await、低效查询、额外重渲染。
-- 回归: 如果改动删除了旧逻辑、判断、过滤条件、事务或兜底分支，要优先判断是否会造成回归。
+      # 文件类型专项关注
+      ${fileChecklist}
 
-# 强制输出规则
-1. 必须使用专业、简洁、温和的中文。
-2. 只评论高价值问题，不要评论格式、排版、命名偏好或文档措辞。
-3. "line" 必须是当前 diff 中新增侧可评论的行号。
-4. 如果高置信度信号已经覆盖问题，不要机械重复；优先补充根因、影响范围或修复建议。
-5. 如果当前只展示了文件的一段局部 hunk，请只针对当前展示的 diff 和提供的上下文评论，不要臆测未展示部分。
-6. 如果提供“代码示例”，必须始终使用独立 fenced code block，即使只有一行代码，也不要写成行内反引号。
+      # Agent 专项要求
+      ${agentChecklist}
 
-# 输出格式 (JSON ONLY)
-你必须直接返回一个 JSON 对象，不包含任何开场白，也不要在 JSON 外层包裹 Markdown 代码块。
-如果没有发现高价值问题，返回 {"comments": []}。
-{
-  "comments": [
-    {
-      "line": number,
-      "body": "💡 **[分类]** 问题描述。\\n\\n建议: 具体改进方案。\\n\\n代码示例:\\n\\n\`\`\`ts\\nconst value = getValue();\\n\`\`\`",
-      "side": "RIGHT"
-    }
-  ]
-}
-`.trim();
+      # 通用审查底线
+      - 安全: 避免鉴权绕过、注入风险、XSS、敏感信息泄露、不安全配置放宽。
+      - 逻辑: 检查边界条件、异常处理、状态同步、资源释放、错误分支和回滚路径。
+      - 性能: 避免高频循环内耗时操作、无意义串行 await、低效查询、额外重渲染。
+      - 回归: 如果改动删除了旧逻辑、判断、过滤条件、事务或兜底分支，要优先判断是否会造成回归。
+
+      # 强制输出规则
+      1. 必须使用专业、简洁、温和的中文。
+      2. 只评论高价值问题，不要评论格式、排版、命名偏好或文档措辞。
+      3. "line" 必须是当前 diff 中新增侧可评论的行号。
+      4. 如果高置信度信号已经覆盖问题，不要机械重复；优先补充根因、影响范围或修复建议。
+      5. 如果当前只展示了文件的一段局部 hunk，请只针对当前展示的 diff 和提供的上下文评论，不要臆测未展示部分。
+      6. 如果提供“代码示例”，必须始终使用独立 fenced code block，即使只有一行代码，也不要写成行内反引号。
+
+      # 输出格式 (JSON ONLY)
+      你必须直接返回一个 JSON 对象，不包含任何开场白，也不要在 JSON 外层包裹 Markdown 代码块。
+      如果没有发现高价值问题，返回 {"comments": []}。
+      {
+        "comments": [
+          {
+            "line": number,
+            "body": "💡 **[分类]** 问题描述。\\n\\n建议: 具体改进方案。\\n\\n代码示例:\\n\\n\`\`\`ts\\nconst value = getValue();\\n\`\`\`",
+            "side": "RIGHT"
+          }
+        ]
+      }
+    `.trim();
   }
 
   /**
@@ -141,6 +151,13 @@ ${fileChecklist}
    */
   private static formatFileChecklist(strategy: ReviewFileStrategy): string {
     return strategy.focusAreas.map((item) => `- ${item}`).join('\n');
+  }
+
+  /**
+   * 输出当前 reviewer agent 的专项审查约束。
+   */
+  private static formatAgentChecklist(agent: ReviewAgentProfile): string {
+    return agent.instructions.map((item) => `- ${item}`).join('\n');
   }
 
   /**
@@ -364,7 +381,7 @@ ${fileChecklist}
         ? '[eslint]'
         : source === 'diff-impact'
           ? '[change-impact]'
-        : '[tsquery]';
+          : '[tsquery]';
 
     if (!line) {
       return sourceLabel;

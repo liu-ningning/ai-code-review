@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { getErrorMessage } from '../../shared/error-utils.js';
 import { logger } from '../../shared/logger.js';
 import { LLMError } from '../../shared/errors.js';
-import { ReviewComment } from '../../types/index.js';
+import { ReviewComment, TokenUsageSummary } from '../../types/index.js';
 
 /**
  * 定义单条 review 评论在模型响应中的合法结构。
@@ -34,6 +34,11 @@ interface OpenAIProviderOptions {
   timeoutMs?: number;
   maxRetries?: number;
   retryBaseDelayMs?: number;
+}
+
+export interface OpenAIReviewResult {
+  comments: ReviewComment[];
+  usage: TokenUsageSummary;
 }
 
 /**
@@ -69,6 +74,14 @@ export class OpenAIProvider {
    * “单文件生成评论”的原子操作调用，不需要再额外包一层重试。
    */
   async generateReview(prompt: string, filePath: string): Promise<ReviewComment[]> {
+    const result = await this.generateReviewWithUsage(prompt, filePath);
+    return result.comments;
+  }
+
+  /**
+   * 发送提示词给模型，并同时返回评论和本次调用的 token 消耗。
+   */
+  async generateReviewWithUsage(prompt: string, filePath: string): Promise<OpenAIReviewResult> {
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       try {
         const response = await this.client.chat.completions.create({
@@ -99,7 +112,15 @@ export class OpenAIProvider {
           });
         }
 
-        return this.parseResponse(content, filePath, usageLine);
+        return {
+          comments: this.parseResponse(content, filePath, usageLine),
+          usage: {
+            promptTokens: response.usage?.prompt_tokens ?? 0,
+            completionTokens: response.usage?.completion_tokens ?? 0,
+            totalTokens: response.usage?.total_tokens
+              ?? ((response.usage?.prompt_tokens ?? 0) + (response.usage?.completion_tokens ?? 0)),
+          },
+        };
       } catch (error: unknown) {
         if (error instanceof LLMError) {
           throw error;

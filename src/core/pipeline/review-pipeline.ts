@@ -22,6 +22,7 @@ import {
   ReviewProgressEvent,
   ReviewRunResult,
   ReviewTarget,
+  TokenUsageSummary,
 } from '../../types/index.js';
 import { ScaleDetector } from '../scale/scale-detector.js';
 import { DiffFilter } from './diff-filter.js';
@@ -39,6 +40,7 @@ import { CodeAnalyzer } from '../../rag/extractor/code-analyzer.js';
 import { MultiFileContractAnalyzer } from '../review/multi-file-contract-analyzer.js';
 import { getErrorMessage } from '../../shared/error-utils.js';
 import { AsyncConcurrencyGate } from '../../shared/async-concurrency-gate.js';
+import { ReviewAgentProfile, resolveReviewAgentProfiles } from '../review/review-agent-profiles.js';
 
 interface ReviewPipelineOptions {
   onProgress?: (event: ReviewProgressEvent) => void | Promise<void>;
@@ -53,6 +55,7 @@ export class ReviewPipeline {
   private llmProvider: OpenAIProvider;
   private checkoutManager = new RepositoryCheckoutManager();
   private contractAnalyzer: MultiFileContractAnalyzer;
+  private readonly reviewerAgents: ReviewAgentProfile[];
 
   /**
    * 创建 review pipeline，并注入 SCM 访问器和可选的进度回调。
@@ -72,6 +75,7 @@ export class ReviewPipeline {
       }
     );
     this.contractAnalyzer = new MultiFileContractAnalyzer(this.scmProvider);
+    this.reviewerAgents = resolveReviewAgentProfiles(config.REVIEW_AGENT_PROFILES);
   }
 
   /**
@@ -104,6 +108,11 @@ export class ReviewPipeline {
       outdatedCount: 0,
       failedCount: 0,
     };
+    const tokenUsage: TokenUsageSummary = {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    };
     const reviewStartedAt = new Date().toISOString();
 
     try {
@@ -125,7 +134,7 @@ export class ReviewPipeline {
       await this.emitProgress('diff_fetched', `Fetched raw diff for ${pr.displayId}`, {
         rawFileCount: rawDiffs.length,
       });
-      
+
       // 3. 过滤低价值 diff，并为每个保留文件推导 review 策略。
       const targetDiffs = DiffFilter.filter(rawDiffs);
       const fileStrategies = new Map<string, ReviewFileStrategy>(
@@ -160,6 +169,7 @@ export class ReviewPipeline {
           outdatedCommentCount: 0,
           commentSyncFailureCount: 0,
           errorCount: 0,
+          tokenUsageTotal: 0,
         });
 
         return {
@@ -169,9 +179,10 @@ export class ReviewPipeline {
           reviewedFileCount: 0,
           errorCount: 0,
           commentSync,
+          tokenUsage,
         };
       }
-      
+
       // 4. 评估整体规模与风险分。
       // 结果会影响进度文案、状态摘要，以及后续 review 的保守程度。
       const { scale, riskScore } = this.scaleDetector.detect(targetDiffs);
@@ -228,6 +239,8 @@ export class ReviewPipeline {
         reviewableFileCount: targetDiffs.length,
         fileConcurrency,
         llmConcurrency,
+        reviewerAgentCount: this.reviewerAgents.length,
+        reviewerAgents: this.reviewerAgents.map((agent) => agent.id),
       });
 
       await this.updateReviewStatus(pr, reviewStatus, {
@@ -236,7 +249,14 @@ export class ReviewPipeline {
         startedAt: reviewStartedAt,
         output: {
           title: 'AI Review in progress',
-          summary: this.buildProgressSummary(scale, riskScore, targetDiffs.length, fileConcurrency, llmConcurrency),
+          summary: this.buildProgressSummary(
+            scale,
+            riskScore,
+            targetDiffs.length,
+            fileConcurrency,
+            llmConcurrency,
+            this.reviewerAgents.length
+          ),
           text: this.buildProgressText(pr, scale, riskScore, targetDiffs),
         },
       });
@@ -262,6 +282,7 @@ export class ReviewPipeline {
               index: currentIndex + 1,
               total: targetDiffs.length,
               completed: completedFiles,
+              reviewerAgentCount: this.reviewerAgents.length,
             });
             reviewResults[currentIndex] = await this.reviewFile(
               owner,
@@ -273,7 +294,8 @@ export class ReviewPipeline {
               ragEngine,
               staticAnalysis,
               clusterSummariesByPath,
-              llmConcurrencyGate
+              llmConcurrencyGate,
+              tokenUsage
             );
             completedFiles += 1;
             await this.emitProgress('file_review_completed', `Reviewed file ${fileDiff.path}`, {
@@ -282,6 +304,7 @@ export class ReviewPipeline {
               total: targetDiffs.length,
               completed: completedFiles,
               commentCount: reviewResults[currentIndex].length,
+              reviewerAgentCount: this.reviewerAgents.length,
             });
           } catch (error: unknown) {
             const errorMessage = getErrorMessage(error);
@@ -313,6 +336,7 @@ export class ReviewPipeline {
         deletedCommentCount: commentSync.deletedCount,
         outdatedCommentCount: commentSync.outdatedCount,
         commentSyncFailureCount: commentSync.failedCount,
+        tokenUsageTotal: tokenUsage.totalTokens,
       });
 
       const totalErrorCount = reviewErrors.length + (commentSync.failedCount > 0 ? 1 : 0);
@@ -339,6 +363,7 @@ export class ReviewPipeline {
         outdatedCommentCount: commentSync.outdatedCount,
         commentSyncFailureCount: commentSync.failedCount,
         errorCount: totalErrorCount,
+        tokenUsageTotal: tokenUsage.totalTokens,
       });
 
       return {
@@ -348,6 +373,7 @@ export class ReviewPipeline {
         reviewedFileCount: targetDiffs.length,
         errorCount: totalErrorCount,
         commentSync,
+        tokenUsage,
       };
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error);
@@ -383,7 +409,8 @@ export class ReviewPipeline {
    * 对单个文件执行上下文提取、提示词构建和 LLM 评审，并合并静态发现。
    *
    * 单文件内部也可能继续拆成多个 review segment，
-   * 以降低多 hunk 大文件在一次 prompt 里的上下文噪音。
+   * 以降低多 hunk 大文件在一次 prompt 里的上下文噪音。每个 segment 内部会继续
+   * 由多个 reviewer agent 并行产出评论，再做统一去重与静态发现合并。
    */
   private async reviewFile(
     owner: string,
@@ -395,7 +422,8 @@ export class ReviewPipeline {
     ragEngine: RAGEngine,
     staticAnalysis: StaticAnalysisResult,
     clusterSummariesByPath: Map<string, CodeContextSnippet[]>,
-    llmConcurrencyGate: AsyncConcurrencyGate
+    llmConcurrencyGate: AsyncConcurrencyGate,
+    tokenUsage: TokenUsageSummary
   ): Promise<ReviewComment[]> {
     logger.debug(`Reviewing file: ${diff.path}`);
 
@@ -443,22 +471,32 @@ export class ReviewPipeline {
         signals: context.signals.length,
       });
 
-      const prompt = PromptBuilder.build(pr, segmentDiff, context, {
-        strategy,
-        segmentIndex: reviewSegments.length > 1 ? segmentIndex + 1 : undefined,
-        totalSegments: reviewSegments.length > 1 ? reviewSegments.length : undefined,
-      });
+      const agentResults = await Promise.allSettled(
+        this.reviewerAgents.map((agent) => this.reviewSegmentWithAgent(
+          pr,
+          diff,
+          segmentDiff,
+          context,
+          strategy,
+          agent,
+          reviewSegments.length,
+          segmentIndex,
+          llmConcurrencyGate,
+          tokenUsage
+        ))
+      );
 
-      try {
-        // LLM 调用还会被一个更细粒度的并发闸门限制，避免把上游 provider 压爆。
-        const comments = await llmConcurrencyGate.run(() => this.llmProvider.generateReview(prompt, diff.path));
-        collectedComments.push(...comments.map((comment) => ({
-          ...comment,
-          oldPath: diff.oldPath || comment.oldPath,
-        })));
-      } catch (error) {
-        lastSegmentError = error;
-        logger.warn(`LLM review failed for ${diff.path} segment ${segmentIndex + 1}/${reviewSegments.length}, continuing with remaining segments.`);
+      for (const result of agentResults) {
+        if (result.status === 'fulfilled') {
+          collectedComments.push(...result.value);
+          continue;
+        }
+
+        lastSegmentError = result.reason;
+      }
+
+      if (agentResults.some((result) => result.status === 'rejected')) {
+        logger.warn(`One or more reviewer agents failed for ${diff.path} segment ${segmentIndex + 1}/${reviewSegments.length}, continuing with remaining agents/segments.`);
       }
     }
 
@@ -478,6 +516,96 @@ export class ReviewPipeline {
     }
 
     return this.mergeStaticFindings(staticFindings, this.deduplicateComments(collectedComments));
+  }
+
+  /**
+   * 在同一段 diff 上运行单个 reviewer agent。
+   */
+  private async reviewSegmentWithAgent(
+    pr: PullRequestMetadata,
+    fileDiff: FileDiff,
+    segmentDiff: FileDiff,
+    context: CodeContext,
+    strategy: ReviewFileStrategy,
+    agent: ReviewAgentProfile,
+    totalSegments: number,
+    segmentIndex: number,
+    llmConcurrencyGate: AsyncConcurrencyGate,
+    tokenUsage: TokenUsageSummary
+  ): Promise<ReviewComment[]> {
+    await this.emitProgress('agent_review_started', `Reviewer agent ${agent.label} started`, {
+      path: fileDiff.path,
+      agentId: agent.id,
+      agentLabel: agent.label,
+      segmentIndex: segmentIndex + 1,
+      totalSegments,
+    });
+
+    const prompt = PromptBuilder.build(pr, segmentDiff, context, {
+      strategy,
+      segmentIndex: totalSegments > 1 ? segmentIndex + 1 : undefined,
+      totalSegments: totalSegments > 1 ? totalSegments : undefined,
+      agent,
+    });
+
+    try {
+      const llmResult = typeof (this.llmProvider as OpenAIProvider & {
+        generateReviewWithUsage?: (prompt: string, filePath: string) => Promise<{ comments: ReviewComment[]; usage: TokenUsageSummary }>;
+      }).generateReviewWithUsage === 'function'
+        ? await llmConcurrencyGate.run(() => (this.llmProvider as OpenAIProvider & {
+          generateReviewWithUsage: (prompt: string, filePath: string) => Promise<{ comments: ReviewComment[]; usage: TokenUsageSummary }>;
+        }).generateReviewWithUsage(prompt, fileDiff.path))
+        : {
+          comments: await llmConcurrencyGate.run(() => this.llmProvider.generateReview(prompt, fileDiff.path)),
+          usage: {
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+          },
+        };
+
+      tokenUsage.promptTokens += llmResult.usage.promptTokens;
+      tokenUsage.completionTokens += llmResult.usage.completionTokens;
+      tokenUsage.totalTokens += llmResult.usage.totalTokens;
+
+      const mappedComments = llmResult.comments.map((comment) => ({
+        ...comment,
+        oldPath: fileDiff.oldPath || comment.oldPath,
+        agentId: agent.id,
+        agentLabel: agent.label,
+      }));
+      await this.emitProgress('agent_review_completed', `Reviewer agent ${agent.label} completed`, {
+        path: fileDiff.path,
+        agentId: agent.id,
+        agentLabel: agent.label,
+        segmentIndex: segmentIndex + 1,
+        totalSegments,
+        agentCommentCount: mappedComments.length,
+        tokenUsagePrompt: llmResult.usage.promptTokens,
+        tokenUsageCompletion: llmResult.usage.completionTokens,
+        tokenUsageTotal: tokenUsage.totalTokens,
+        comments: mappedComments.map((comment) => ({
+          path: comment.path,
+          line: comment.line,
+          side: comment.side,
+          body: comment.body,
+          agentId: comment.agentId,
+          agentLabel: comment.agentLabel,
+        })),
+      });
+
+      return mappedComments;
+    } catch (error: unknown) {
+      await this.emitProgress('agent_review_failed', `Reviewer agent ${agent.label} failed`, {
+        path: fileDiff.path,
+        agentId: agent.id,
+        agentLabel: agent.label,
+        segmentIndex: segmentIndex + 1,
+        totalSegments,
+        error: getErrorMessage(error),
+      });
+      throw error;
+    }
   }
 
   /**
@@ -531,9 +659,10 @@ export class ReviewPipeline {
     riskScore: number,
     fileCount: number,
     fileConcurrency: number,
-    llmConcurrency: number
+    llmConcurrency: number,
+    reviewerAgentCount: number
   ): string {
-    return `正在分析 ${fileCount} 个文件，规模 ${scale}，风险分 ${riskScore}，文件并发 ${fileConcurrency}，LLM 并发 ${llmConcurrency}。`;
+    return `正在分析 ${fileCount} 个文件，规模 ${scale}，风险分 ${riskScore}，review agent ${reviewerAgentCount} 个，文件并发 ${fileConcurrency}，LLM 并发 ${llmConcurrency}。`;
   }
 
   /**
@@ -709,7 +838,7 @@ export class ReviewPipeline {
             ? 'Review 结果: 通过'
             : conclusion === 'neutral' && fileCount === 0
               ? 'Review 结果: 已跳过'
-            : 'Review 结果: 已完成';
+              : 'Review 结果: 已完成';
 
       return this.truncateForCheckText(
         `${this.buildReviewLabel(pr)} review completed.\n${resultLine}\n分析文件数: ${fileCount}\n发布评论数: ${commentSync.postedCount}\n删除旧评论数: ${commentSync.deletedCount}\n标记过期评论数: ${commentSync.outdatedCount}`
