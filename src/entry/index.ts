@@ -13,7 +13,7 @@ import { GitClient } from '../core/review/git-client.js';
 import { GitHubProvider } from '../providers/scm/github.provider.js';
 import { GitLabProvider } from '../providers/scm/gitlab.provider.js';
 import { logger } from '../shared/logger.js';
-import { ISCMProvider } from '../types/index.js';
+import { ISCMProvider, SCMType } from '../types/index.js';
 
 /**
  * 当前进程唯一的 Fastify 实例。
@@ -29,9 +29,9 @@ const fastify = Fastify({ logger: false });
  * 入口层不直接把某个 provider 做成全局单例，而是提供一个工厂函数，
  * 这样控制器、pipeline、测试和未来的旁路任务都可以按需创建自己的实例。
  */
-function createScmProvider(): ISCMProvider {
+function createScmProvider(scmType: SCMType = config.SCM_TYPE): ISCMProvider {
   // GitHub 模式下创建 GitHubProvider，并注入 API / Web 根地址。
-  if (config.SCM_TYPE === 'github') {
+  if (scmType === 'github') {
     if (!config.GITHUB_TOKEN) {
       throw new Error('GITHUB_TOKEN is not configured');
     }

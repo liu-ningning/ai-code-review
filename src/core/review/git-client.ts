@@ -97,6 +97,22 @@ export class GitClient {
   }
 
   /**
+   * 判断给定目录是否是一个有效的 bare git 仓库。
+   *
+   * mirror 缓存目录可能因为中断或手动残留而只剩空目录，
+   * checkout 层会用这个探针决定是否需要删掉并重建缓存。
+   */
+  async isBareRepository(gitDir: string): Promise<boolean> {
+    try {
+      const output = await this.runForGitDir(gitDir, ['rev-parse', '--is-bare-repository']);
+      return output.trim() === 'true';
+    } catch (error: unknown) {
+      this.rethrowIfGitMissing(error);
+      return false;
+    }
+  }
+
+  /**
    * 在指定 git 目录上下文中执行 git 子命令。
    *
    * review 场景下大量使用 bare mirror，因此这里统一走 `--git-dir`，

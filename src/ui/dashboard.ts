@@ -246,6 +246,7 @@ const {
   List,
   Progress,
   Row,
+  Select,
   Space,
   Switch,
   Tag,
@@ -259,6 +260,7 @@ const { Title, Paragraph, Text } = Typography;
 const STORAGE_KEY = 'ai-review-dashboard-form-v2';
 
 const DEFAULT_FORM = {
+  scmType: 'github',
   projectPath: '',
   reviewToken: '',
   stream: true,
@@ -334,6 +336,7 @@ function escapeString(value) {
 
 function buildPayload(form) {
   const payload = {
+    scmType: escapeString(form.scmType).trim() || 'github',
     kind: 'merge_request',
     projectPath: escapeString(form.projectPath).trim(),
     mergeRequestIid: Number(form.mergeRequestIid),
@@ -901,19 +904,30 @@ function DashboardApp() {
           className: 'section-card',
           size: 'small',
           title: '发起一次评审',
-          extra: h(Tag, { color: formState.stream ? 'processing' : 'default' }, formState.stream ? '流式模式' : '同步模式'),
+          extra: h(Space, { size: 8 }, [
+            h(Tag, { key: 'scm', color: formState.scmType === 'github' ? 'geekblue' : 'orange' }, formState.scmType === 'github' ? 'GitHub' : 'GitLab'),
+            h(Tag, { key: 'mode', color: formState.stream ? 'processing' : 'default' }, formState.stream ? '流式模式' : '同步模式'),
+          ]),
         }, h(Form, {
           layout: 'vertical',
           size: 'small',
           onFinish: handleSubmit,
         }, [
+          h(Form.Item, { key: 'scm-type', label: '代码平台' }, h(Select, {
+            value: formState.scmType,
+            options: [
+              { label: 'GitHub', value: 'github' },
+              { label: 'GitLab', value: 'gitlab' },
+            ],
+            onChange: (value) => setField('scmType', value),
+          })),
           h(Form.Item, { key: 'kind-fixed', label: 'Review 类型' }, h(Input, {
             value: 'merge_request',
             readOnly: true,
           })),
           h(Form.Item, { key: 'project-path', label: '项目路径' }, h(Input, {
             value: formState.projectPath,
-            placeholder: 'owner/repo 或 group/project',
+            placeholder: formState.scmType === 'github' ? 'owner/repo' : 'group/project',
             onChange: (event) => setField('projectPath', event.target.value),
           })),
           h(Form.Item, { key: 'mr-number', label: 'PR / MR 编号' }, h(InputNumber, {

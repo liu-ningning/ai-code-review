@@ -83,6 +83,7 @@ export class ReviewPipeline {
    */
   async run(target: ReviewTarget): Promise<ReviewRunResult> {
     const { owner, repo } = target;
+    const scmType = target.scmType ?? config.SCM_TYPE;
     const targetLabel =
       target.kind === 'merge_request' ? `MR !${target.number}` : `commit ${target.branch}@${target.headSha.slice(0, 8)}`;
 
@@ -197,7 +198,7 @@ export class ReviewPipeline {
       // - 统一静态分析入口
       // - 多文件导出契约分析
       // - 改动簇摘要生成
-      repositoryCheckout = await this.checkoutManager.checkout(owner, repo, pr.sourceBranch, pr.headSha);
+      repositoryCheckout = await this.checkoutManager.checkout(owner, repo, pr.sourceBranch, pr.headSha, scmType);
       await this.emitProgress('checkout_prepared', `Prepared repository checkout for ${owner}/${repo}`, {
         checkoutDir: repositoryCheckout.rootDir,
       });

@@ -11,6 +11,7 @@ import { LRUCache } from 'lru-cache';
 import { config } from '../../config/index.js';
 import { getErrorMessage } from '../../shared/error-utils.js';
 import { logger } from '../../shared/logger.js';
+import { SCMType } from '../../types/index.js';
 import { GitClient } from './git-client.js';
 
 const DEFAULT_FETCH_TTL_MS = 5 * 60 * 1000;
@@ -39,16 +40,18 @@ export class RepositoryCheckoutManager {
     ttl: DEFAULT_FETCH_TTL_MS,
   });
   private readonly cacheRoot = path.join(os.tmpdir(), 'ai-review-repo-cache');
-  private readonly gitClient = new GitClient({
-    token: config.SCM_TYPE === 'github' ? config.GITHUB_TOKEN : config.GITLAB_TOKEN,
-    scmType: config.SCM_TYPE,
-  });
-
   /**
    * 为指定仓库和目标提交准备本地 checkout，并返回可清理句柄。
    */
-  async checkout(owner: string, repo: string, branch: string, headSha?: string): Promise<RepositoryCheckout> {
+  async checkout(
+    owner: string,
+    repo: string,
+    branch: string,
+    headSha?: string,
+    scmType: SCMType = config.SCM_TYPE
+  ): Promise<RepositoryCheckout> {
     const repoKey = `${owner}/${repo}`;
+    const gitClient = this.createGitClient(scmType);
 
     return this.withRepoLock(repoKey, async () => {
       // checkout 流程固定为：
@@ -59,14 +62,14 @@ export class RepositoryCheckoutManager {
       await mkdir(this.cacheRoot, { recursive: true });
 
       const mirrorDir = path.join(this.cacheRoot, this.toCacheDirectoryName(repoKey));
-      const repoUrl = this.buildRepositoryUrl(owner, repo);
+      const repoUrl = this.buildRepositoryUrl(owner, repo, scmType);
 
-      await this.ensureMirror(mirrorDir, repoUrl);
-      await this.ensureFreshMirror(mirrorDir, repoUrl, branch, headSha);
+      await this.ensureMirror(gitClient, mirrorDir, repoUrl);
+      await this.ensureFreshMirror(gitClient, mirrorDir, repoUrl, branch, headSha);
 
       const checkoutDir = await mkdtemp(path.join(os.tmpdir(), 'ai-review-checkout-'));
-      const checkoutRef = await this.resolveCheckoutRef(mirrorDir, branch, headSha);
-      await this.gitClient.addDetachedWorktree(mirrorDir, checkoutDir, checkoutRef);
+      const checkoutRef = await this.resolveCheckoutRef(gitClient, mirrorDir, branch, headSha);
+      await gitClient.addDetachedWorktree(mirrorDir, checkoutDir, checkoutRef);
 
       logger.info(`Prepared repository checkout for ${repoKey}`, {
         branch,
@@ -78,7 +81,7 @@ export class RepositoryCheckoutManager {
         rootDir: checkoutDir,
         cleanup: async () => {
           try {
-            await this.gitClient.removeWorktree(mirrorDir, checkoutDir);
+            await gitClient.removeWorktree(mirrorDir, checkoutDir);
           } catch (error: unknown) {
             logger.warn(`⚠️ Failed to remove worktree for ${repoKey}: ${getErrorMessage(error)}`);
           }
@@ -117,30 +120,43 @@ export class RepositoryCheckoutManager {
    *
    * 即使 mirror 已存在，也要同步 origin 地址，避免仓库域名或来源变更后继续使用旧地址。
    */
-  private async ensureMirror(mirrorDir: string, repoUrl: string): Promise<void> {
+  private async ensureMirror(gitClient: GitClient, mirrorDir: string, repoUrl: string): Promise<void> {
     try {
       await stat(mirrorDir);
     } catch {
       logger.info(`Cloning mirror repository into cache: ${mirrorDir}`);
-      await this.gitClient.cloneMirror(repoUrl, mirrorDir);
+      await gitClient.cloneMirror(repoUrl, mirrorDir);
       RepositoryCheckoutManager.mirrorFreshnessCache.set(mirrorDir, Date.now());
       return;
     }
 
-    await this.gitClient.setRemoteUrl(mirrorDir, 'origin', repoUrl);
+    // 如果缓存目录存在但不是有效的 bare repo，说明上次 clone/fetch 过程被打断
+    // 或目录被外部污染。这里直接清理并重建，避免后续 remote/fetch/worktree 全部失败。
+    if (!(await gitClient.isBareRepository(mirrorDir))) {
+      logger.warn(`⚠️ Mirror cache is invalid, rebuilding repository cache: ${mirrorDir}`);
+      await rm(mirrorDir, { force: true, recursive: true });
+      RepositoryCheckoutManager.mirrorFreshnessCache.delete(mirrorDir);
+      this.clearCommitPresenceEntries(mirrorDir);
+      await gitClient.cloneMirror(repoUrl, mirrorDir);
+      RepositoryCheckoutManager.mirrorFreshnessCache.set(mirrorDir, Date.now());
+      return;
+    }
+
+    await gitClient.setRemoteUrl(mirrorDir, 'origin', repoUrl);
   }
 
   /**
    * 在缓存过期或目标提交缺失时刷新 mirror，并按需补抓指定 head。
    */
   private async ensureFreshMirror(
+    gitClient: GitClient,
     mirrorDir: string,
     repoUrl: string,
     branch: string,
     headSha?: string
   ): Promise<void> {
     const needsRefresh = await this.shouldRefreshMirror(mirrorDir);
-    const hasHeadSha = headSha ? await this.hasCommit(mirrorDir, headSha) : true;
+    const hasHeadSha = headSha ? await this.hasCommit(gitClient, mirrorDir, headSha) : true;
 
     if (!needsRefresh && hasHeadSha) {
       return;
@@ -151,13 +167,13 @@ export class RepositoryCheckoutManager {
       headSha,
     });
 
-    await this.gitClient.fetchOrigin(mirrorDir);
+    await gitClient.fetchOrigin(mirrorDir);
     RepositoryCheckoutManager.mirrorFreshnessCache.set(mirrorDir, Date.now());
     // refresh 之后，之前的 commit presence 判断可能已经过期，需要整体清掉。
     this.clearCommitPresenceEntries(mirrorDir);
 
-    if (headSha && !(await this.hasCommit(mirrorDir, headSha))) {
-      await this.gitClient.fetchRef(mirrorDir, 'origin', headSha);
+    if (headSha && !(await this.hasCommit(gitClient, mirrorDir, headSha))) {
+      await gitClient.fetchRef(mirrorDir, 'origin', headSha);
       RepositoryCheckoutManager.mirrorFreshnessCache.set(mirrorDir, Date.now());
     }
   }
@@ -188,13 +204,13 @@ export class RepositoryCheckoutManager {
    *
    * 优先精确 headSha 能避免分支指针在 review 执行期间继续移动造成的不确定性。
    */
-  private async resolveCheckoutRef(mirrorDir: string, branch: string, headSha?: string): Promise<string> {
-    if (headSha && await this.hasCommit(mirrorDir, headSha)) {
+  private async resolveCheckoutRef(gitClient: GitClient, mirrorDir: string, branch: string, headSha?: string): Promise<string> {
+    if (headSha && await this.hasCommit(gitClient, mirrorDir, headSha)) {
       return headSha;
     }
 
     const remoteBranchRef = `refs/remotes/origin/${branch}`;
-    if (await this.hasCommit(mirrorDir, remoteBranchRef)) {
+    if (await this.hasCommit(gitClient, mirrorDir, remoteBranchRef)) {
       return remoteBranchRef;
     }
 
@@ -204,13 +220,13 @@ export class RepositoryCheckoutManager {
   /**
    * 带缓存地判断 mirror 里是否已经存在某个提交或引用。
    */
-  private async hasCommit(mirrorDir: string, ref: string): Promise<boolean> {
+  private async hasCommit(gitClient: GitClient, mirrorDir: string, ref: string): Promise<boolean> {
     const cacheKey = `${mirrorDir}:${ref}`;
     if (RepositoryCheckoutManager.commitPresenceCache.has(cacheKey)) {
       return true;
     }
 
-    const hasCommit = await this.gitClient.hasCommit(mirrorDir, ref);
+    const hasCommit = await gitClient.hasCommit(mirrorDir, ref);
     if (!hasCommit) {
       return false;
     }
@@ -238,13 +254,13 @@ export class RepositoryCheckoutManager {
    *
    * owner 可能本身包含 group/subgroup，需要逐段编码再拼回去。
    */
-  private buildRepositoryUrl(owner: string, repo: string): string {
+  private buildRepositoryUrl(owner: string, repo: string, scmType: SCMType): string {
     const repoPath = `${owner}/${repo}`
       .split('/')
       .map((segment) => encodeURIComponent(segment))
       .join('/');
 
-    const webBaseUrl = config.SCM_TYPE === 'github'
+    const webBaseUrl = scmType === 'github'
       ? config.GITHUB_WEB_BASE_URL
       : config.GITLAB_BASE_URL;
 
@@ -258,5 +274,15 @@ export class RepositoryCheckoutManager {
    */
   private toCacheDirectoryName(repoKey: string): string {
     return `${repoKey.replace(/[^\w.-]+/g, '__')}.git`;
+  }
+
+  /**
+   * 按本次 review 使用的 SCM 类型创建对应的 git 认证客户端。
+   */
+  private createGitClient(scmType: SCMType): GitClient {
+    return new GitClient({
+      token: scmType === 'github' ? config.GITHUB_TOKEN : config.GITLAB_TOKEN,
+      scmType,
+    });
   }
 }

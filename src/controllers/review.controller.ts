@@ -11,7 +11,7 @@ import { config } from '../config/index.js';
 import { ReviewCoordinator } from '../core/pipeline/review-coordinator.js';
 import { ReviewPipeline } from '../core/pipeline/review-pipeline.js';
 import { logger } from '../shared/logger.js';
-import { ISCMProvider, ReviewProgressEvent, ReviewRunResult, ReviewTarget } from '../types/index.js';
+import { ISCMProvider, ReviewProgressEvent, ReviewRunResult, ReviewTarget, SCMType } from '../types/index.js';
 import { dashboardScript, dashboardStyles, renderDashboardPage } from '../ui/dashboard.js';
 
 /**
@@ -21,7 +21,7 @@ import { dashboardScript, dashboardStyles, renderDashboardPage } from '../ui/das
  * - `reviewCoordinator` 负责同一 review 目标的串行化与去重
  */
 interface RegisterReviewControllerOptions {
-  createScmProvider: () => ISCMProvider;
+  createScmProvider: (scmType?: SCMType) => ISCMProvider;
   reviewCoordinator: ReviewCoordinator;
 }
 
@@ -196,12 +196,27 @@ export function registerReviewController(
    * - 既支持一次性 JSON，也支持实时 NDJSON
    */
   fastify.post('/ci/review', async (request, reply) => {
-    // 两种 SCM 模式分别检查各自的 token，避免后续执行到 provider 才报错。
-    if (config.SCM_TYPE === 'gitlab' && !config.GITLAB_TOKEN) {
+    const body = request.body as {
+      scmType?: SCMType;
+      kind?: 'commit' | 'merge_request';
+      author?: string;
+      baseSha?: string;
+      branch?: string;
+      description?: string;
+      headSha?: string;
+      htmlUrl?: string;
+      mergeRequestIid?: number | string;
+      projectPath?: string;
+      title?: string;
+    };
+    const requestedScmType = resolveRequestedScmType(body.scmType);
+
+    // 每次请求按显式 scmType 决定走哪种平台，而不是绑定进程级默认值。
+    if (requestedScmType === 'gitlab' && !config.GITLAB_TOKEN) {
       return reply.status(503).send({ error: 'GITLAB_TOKEN is not configured' });
     }
 
-    if (config.SCM_TYPE === 'github' && !config.GITHUB_TOKEN) {
+    if (requestedScmType === 'github' && !config.GITHUB_TOKEN) {
       return reply.status(503).send({ error: 'GITHUB_TOKEN is not configured' });
     }
 
@@ -214,19 +229,6 @@ export function registerReviewController(
     if (!requestToken || requestToken !== config.CI_REVIEW_TOKEN) {
       return reply.status(401).send({ error: 'Unauthorized' });
     }
-
-    const body = request.body as {
-      kind?: 'commit' | 'merge_request';
-      author?: string;
-      baseSha?: string;
-      branch?: string;
-      description?: string;
-      headSha?: string;
-      htmlUrl?: string;
-      mergeRequestIid?: number | string;
-      projectPath?: string;
-      title?: string;
-    };
 
     if (!body.projectPath) {
       return reply.status(400).send({ error: 'projectPath is required' });
@@ -249,6 +251,7 @@ export function registerReviewController(
       }
 
       target = {
+        scmType: requestedScmType,
         kind: 'merge_request',
         owner,
         repo,
@@ -261,6 +264,7 @@ export function registerReviewController(
       }
 
       target = {
+        scmType: requestedScmType,
         kind: 'commit',
         owner,
         repo,
@@ -277,6 +281,7 @@ export function registerReviewController(
     const streamProgress = shouldStreamCiReviewProgress(request);
     logger.info(`Accepted CI review request ${requestId} for ${owner}/${repo}`, {
       streamProgress,
+      scmType: requestedScmType,
       targetKind: target.kind,
     });
 
@@ -289,7 +294,7 @@ export function registerReviewController(
       };
       // 这里单独创建一个带 onProgress 回调的 pipeline，
       // 使控制器能把内部阶段实时映射成前端可读消息。
-      const pipeline = new ReviewPipeline(options.createScmProvider(), {
+      const pipeline = new ReviewPipeline(options.createScmProvider(requestedScmType), {
         onProgress: async (event: ReviewProgressEvent) => {
           writeNdjsonLine(stream, {
             type: 'progress',
@@ -335,7 +340,7 @@ export function registerReviewController(
     }
 
     // 同步模式下不返回阶段事件，只在 review 完成后一次性返回最终结果。
-    const pipeline = new ReviewPipeline(options.createScmProvider());
+    const pipeline = new ReviewPipeline(options.createScmProvider(requestedScmType));
     const result = await options.reviewCoordinator.runExclusive(
       buildCiReviewExecutionKey(target),
       () => pipeline.run(target)
@@ -370,7 +375,7 @@ function splitProjectPath(projectPath: string): { owner: string; repo: string } 
     .filter(Boolean);
 
   if (segments.length < 2) {
-    throw new Error(`Invalid GitLab project path: ${projectPath}`);
+    throw new Error(`Invalid project path: ${projectPath}`);
   }
 
   const repo = segments.pop()!;
@@ -378,6 +383,16 @@ function splitProjectPath(projectPath: string): { owner: string; repo: string } 
     owner: segments.join('/'),
     repo,
   };
+}
+
+/**
+ * 解析本次请求显式指定的 SCM 类型。
+ *
+ * 如果调用方没有传，就回退到进程默认 `SCM_TYPE`，
+ * 这样旧调用方依然兼容，新调用方则可按请求切换平台。
+ */
+function resolveRequestedScmType(rawValue: unknown): SCMType {
+  return rawValue === 'github' ? 'github' : rawValue === 'gitlab' ? 'gitlab' : config.SCM_TYPE;
 }
 
 /**
@@ -924,11 +939,13 @@ function buildCompletionProgressMessage(
  * merge_request 和 commit 分别使用不同命名空间，避免 key 冲突。
  */
 function buildCiReviewExecutionKey(target: ReviewTarget): string {
+  const scmPrefix = target.scmType ?? config.SCM_TYPE;
+
   if (target.kind === 'merge_request') {
-    return `ci:mr:${target.owner}/${target.repo}#${target.number}`;
+    return `ci:${scmPrefix}:mr:${target.owner}/${target.repo}#${target.number}`;
   }
 
-  return `ci:commit:${target.owner}/${target.repo}@${target.headSha}`;
+  return `ci:${scmPrefix}:commit:${target.owner}/${target.repo}@${target.headSha}`;
 }
 
 /**

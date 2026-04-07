@@ -11,6 +11,11 @@
 export type ReviewTargetKind = 'merge_request' | 'commit';
 
 /**
+ * 标识本次 review 走哪种源码托管平台。
+ */
+export type SCMType = 'gitlab' | 'github';
+
+/**
  * 描述一次 Git diff 对比使用的三段提交引用。
  */
 export interface ReviewDiffRefs {
@@ -227,12 +232,14 @@ export interface ReviewCheckRunUpdatePayload {
  */
 export type ReviewTarget =
   | {
+      scmType?: SCMType;
       kind: 'merge_request';
       owner: string;
       repo: string;
       number: number;
     }
   | {
+      scmType?: SCMType;
       kind: 'commit';
       owner: string;
       repo: string;
