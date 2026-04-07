@@ -295,7 +295,7 @@ pnpm test
 pnpm test:file tests/static-review-analyzer.test.ts
 ```
 
-默认监听端口为 `3000`。
+默认监听端口为 `9527`。
 
 ### Docker 运行
 
@@ -303,7 +303,7 @@ pnpm test:file tests/static-review-analyzer.test.ts
 
 ```bash
 docker build -t ai-code-review:local .
-docker run --rm -p 3000:3000 --env-file .env ai-code-review:local
+docker run --rm -p 9527:9527 --env-file .env ai-code-review:local
 ```
 
 构建基础镜像：
@@ -322,38 +322,38 @@ docker build -f Dockerfile.base -t ai-code-review:base .
 
 ### 必填项
 
-| 变量 | 说明 |
-| --- | --- |
-| `SCM_TYPE` | SCM 类型，支持 `github` 和 `gitlab` |
-| `CI_REVIEW_TOKEN` | `/ci/review` 接口鉴权 token |
-| `OPENAI_API_KEY` | LLM 服务鉴权 token |
-| `GITHUB_TOKEN` | GitHub 模式下用于读取 diff、文件内容以及回写评论和状态 |
+| 变量              | 说明                                                   |
+| ----------------- | ------------------------------------------------------ |
+| `SCM_TYPE`        | SCM 类型，支持 `github` 和 `gitlab`                    |
+| `CI_REVIEW_TOKEN` | `/ci/review` 接口鉴权 token                            |
+| `OPENAI_API_KEY`  | LLM 服务鉴权 token                                     |
+| `GITHUB_TOKEN`    | GitHub 模式下用于读取 diff、文件内容以及回写评论和状态 |
 
 GitLab 模式额外需要：
 
-| 变量 | 说明 |
-| --- | --- |
+| 变量           | 说明             |
+| -------------- | ---------------- |
 | `GITLAB_TOKEN` | GitLab API token |
 
 ### 常用可选项
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `GITHUB_API_BASE_URL` | `https://api.github.com` | GitHub API 根地址 |
-| `GITHUB_WEB_BASE_URL` | `https://github.com` | GitHub Web 根地址 |
-| `GITLAB_BASE_URL` | `https://gitlab.com` | GitLab 模式下的根地址，JiHuLab 可改成 `https://jihulab.com` |
-| `GITLAB_WEBHOOK_SECRET` | 空 | GitLab webhook 校验 secret |
-| `OPENAI_MODEL` | `mimo-v2-flash` | 使用的模型名 |
-| `LLM_BASE_URL` | `https://api.xiaomimimo.com/v1` | OpenAI 兼容接口地址 |
-| `REVIEW_AGENT_PROFILES` | `correctness,security,regression` | 启用的 reviewer agent 列表，多个值用逗号分隔 |
-| `LLM_REVIEW_CONCURRENCY` | `2` | 发给 LLM 的实际并发数，上限会被文件并发数和待 review 文件数收敛 |
-| `LLM_TIMEOUT_MS` | `30000` | 单次 LLM 请求超时时间 |
-| `LLM_MAX_RETRIES` | `2` | LLM 瞬时失败时的最大重试次数，仅对超时、429、5xx 等重试 |
-| `LLM_RETRY_BASE_DELAY_MS` | `1000` | LLM 重试的基础退避时间 |
-| `MAX_FILE_TOKEN_BUDGET` | `4000` | 单文件上下文预算 |
-| `MAX_RAG_HOPS` | `1` | 跨文件上下文最大跳数 |
-| `REVIEW_FILE_CONCURRENCY` | `2` | 文件并发 review 数 |
-| `REVIEW_FAIL_ON_COMMENTS` | `true` | 有评论时是否直接判失败 |
+| 变量                      | 默认值                            | 说明                                                            |
+| ------------------------- | --------------------------------- | --------------------------------------------------------------- |
+| `GITHUB_API_BASE_URL`     | `https://api.github.com`          | GitHub API 根地址                                               |
+| `GITHUB_WEB_BASE_URL`     | `https://github.com`              | GitHub Web 根地址                                               |
+| `GITLAB_BASE_URL`         | `https://gitlab.com`              | GitLab 模式下的根地址，JiHuLab 可改成 `https://jihulab.com`     |
+| `GITLAB_WEBHOOK_SECRET`   | 空                                | GitLab webhook 校验 secret                                      |
+| `OPENAI_MODEL`            | `mimo-v2-flash`                   | 使用的模型名                                                    |
+| `LLM_BASE_URL`            | `https://api.xiaomimimo.com/v1`   | OpenAI 兼容接口地址                                             |
+| `REVIEW_AGENT_PROFILES`   | `correctness,security,regression` | 启用的 reviewer agent 列表，多个值用逗号分隔                    |
+| `LLM_REVIEW_CONCURRENCY`  | `2`                               | 发给 LLM 的实际并发数，上限会被文件并发数和待 review 文件数收敛 |
+| `LLM_TIMEOUT_MS`          | `30000`                           | 单次 LLM 请求超时时间                                           |
+| `LLM_MAX_RETRIES`         | `2`                               | LLM 瞬时失败时的最大重试次数，仅对超时、429、5xx 等重试         |
+| `LLM_RETRY_BASE_DELAY_MS` | `1000`                            | LLM 重试的基础退避时间                                          |
+| `MAX_FILE_TOKEN_BUDGET`   | `4000`                            | 单文件上下文预算                                                |
+| `MAX_RAG_HOPS`            | `1`                               | 跨文件上下文最大跳数                                            |
+| `REVIEW_FILE_CONCURRENCY` | `2`                               | 文件并发 review 数                                              |
+| `REVIEW_FAIL_ON_COMMENTS` | `true`                            | 有评论时是否直接判失败                                          |
 
 ### 最小 `.env` 示例
 
@@ -384,11 +384,11 @@ MAX_RAG_HOPS=1
 
 CI 构建基础镜像时，默认还会用到这几个变量：
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `NODE_BASE_IMAGE` | `node:24-bookworm-slim` | 基础镜像的 Node 发行版 |
-| `DEBIAN_MIRROR_HOST` | `mirrors.ustc.edu.cn` | 基础镜像构建时使用的 Debian 镜像源 |
-| `NPM_REGISTRY` | `https://registry.npmmirror.com` | Corepack / pnpm 下载使用的 npm registry |
+| 变量                 | 默认值                           | 说明                                    |
+| -------------------- | -------------------------------- | --------------------------------------- |
+| `NODE_BASE_IMAGE`    | `node:24-bookworm-slim`          | 基础镜像的 Node 发行版                  |
+| `DEBIAN_MIRROR_HOST` | `mirrors.ustc.edu.cn`            | 基础镜像构建时使用的 Debian 镜像源      |
+| `NPM_REGISTRY`       | `https://registry.npmmirror.com` | Corepack / pnpm 下载使用的 npm registry |
 
 ## HTTP 接口
 
@@ -439,23 +439,23 @@ CI 主动触发 review 的接口，也是部署前最常用的接入方式。
 
 #### 请求体字段
 
-| 字段 | 说明 |
-| --- | --- |
-| `kind` | `commit` 或 `merge_request` |
-| `projectPath` | SCM 项目路径，例如 `owner/repo` 或 `group/project` |
-| `branch` | commit review 时必填 |
-| `baseSha` | commit review 可选 |
-| `headSha` | commit review 时必填 |
-| `mergeRequestIid` | merge request review 时必填 |
-| `author` | commit review 可选 |
-| `title` | commit review 可选 |
-| `description` | commit review 可选 |
-| `htmlUrl` | commit review 可选 |
+| 字段              | 说明                                               |
+| ----------------- | -------------------------------------------------- |
+| `kind`            | `commit` 或 `merge_request`                        |
+| `projectPath`     | SCM 项目路径，例如 `owner/repo` 或 `group/project` |
+| `branch`          | commit review 时必填                               |
+| `baseSha`         | commit review 可选                                 |
+| `headSha`         | commit review 时必填                               |
+| `mergeRequestIid` | merge request review 时必填                        |
+| `author`          | commit review 可选                                 |
+| `title`           | commit review 可选                                 |
+| `description`     | commit review 可选                                 |
+| `htmlUrl`         | commit review 可选                                 |
 
 #### commit review 示例
 
 ```bash
-curl -X POST http://localhost:3000/ci/review \
+curl -X POST http://localhost:9527/ci/review \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${CI_REVIEW_TOKEN}" \
   -d '{
@@ -474,7 +474,7 @@ curl -X POST http://localhost:3000/ci/review \
 #### PR / merge request review 示例
 
 ```bash
-curl -X POST http://localhost:3000/ci/review \
+curl -X POST http://localhost:9527/ci/review \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${CI_REVIEW_TOKEN}" \
   -d '{
@@ -491,11 +491,11 @@ curl -X POST http://localhost:3000/ci/review \
 
 ### 普通模式返回语义
 
-| HTTP 状态码 | 含义 |
-| --- | --- |
-| `200` | review 通过 |
-| `409` | review 未通过 |
-| `500` | review 执行失败，或评论同步未完成 |
+| HTTP 状态码 | 含义                              |
+| ----------- | --------------------------------- |
+| `200`       | review 通过                       |
+| `409`       | review 未通过                     |
+| `500`       | review 执行失败，或评论同步未完成 |
 
 返回示例：
 
@@ -532,7 +532,7 @@ curl -X POST http://localhost:3000/ci/review \
 示例：
 
 ```bash
-curl --no-buffer -X POST "http://localhost:3000/ci/review?stream=1" \
+curl --no-buffer -X POST "http://localhost:9527/ci/review?stream=1" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${CI_REVIEW_TOKEN}" \
   -d '{
@@ -545,23 +545,23 @@ curl --no-buffer -X POST "http://localhost:3000/ci/review?stream=1" \
 
 流式输出格式为 `NDJSON`，典型事件如下：
 
-| 事件类型 | 说明 |
-| --- | --- |
-| `accepted` | 请求已受理 |
-| `progress` | 某个执行阶段已推进 |
-| `heartbeat` | 任务仍在运行 |
-| `result` | 最终结果 |
-| `error` | 执行期间发生异常 |
+| 事件类型    | 说明               |
+| ----------- | ------------------ |
+| `accepted`  | 请求已受理         |
+| `progress`  | 某个执行阶段已推进 |
+| `heartbeat` | 任务仍在运行       |
+| `result`    | 最终结果           |
+| `error`     | 执行期间发生异常   |
 
 除了原有的 `type`、`stage`、`statusCode`、`data` 这类机器字段外，流式事件现在还会附带更适合日志展示的字段：
 
-| 字段 | 说明 |
-| --- | --- |
-| `message` | 人类可读的一句话进度描述，适合直接打印到 CI 日志 |
-| `emoji` | 当前阶段的视觉标识 |
-| `progress.current` | 已完成文件数 |
-| `progress.total` | 总文件数 |
-| `progress.percent` | 当前进度百分比 |
+| 字段               | 说明                                             |
+| ------------------ | ------------------------------------------------ |
+| `message`          | 人类可读的一句话进度描述，适合直接打印到 CI 日志 |
+| `emoji`            | 当前阶段的视觉标识                               |
+| `progress.current` | 已完成文件数                                     |
+| `progress.total`   | 总文件数                                         |
+| `progress.percent` | 当前进度百分比                                   |
 
 输出示例：
 
@@ -617,6 +617,136 @@ ai-review:
 如果你的 pipeline 需要基于最终结果决定是否失败，可以在调用端额外解析最后一条 `result` 事件。
 
 ## 部署模型
+
+### 使用 PM2 在服务器部署
+
+如果你希望把服务直接部署在 Linux 服务器上，并使用 PM2 管理进程，推荐使用下面这套方式。
+
+#### 服务器准备
+
+- Node.js `24+`
+- pnpm `10+`
+- git
+- PM2
+
+安装 PM2：
+
+```bash
+npm install -g pm2
+```
+
+#### 首次部署
+
+1. 拉取代码并安装依赖
+
+```bash
+git clone <your-repo-url>
+cd ai-code-review
+pnpm install
+```
+
+2. 准备环境变量
+
+```bash
+cp .env.example .env
+```
+
+然后按你的实际平台填写 `.env`，至少包括：
+
+- `OPENAI_API_KEY`
+- `LLM_BASE_URL`
+- `OPENAI_MODEL`
+- `CI_REVIEW_TOKEN`
+- `GITHUB_TOKEN` 与 `GITHUB_*`，用于 GitHub review
+- `GITLAB_TOKEN` 与 `GITLAB_BASE_URL`，用于 GitLab review
+
+说明：
+
+- 现在 `/ci/review` 支持按请求体里的 `scmType` 在 GitHub 和 GitLab 之间切换
+- 因此生产环境通常可以同时配置 GitHub 和 GitLab 的 token
+- `.env` 会在进程启动时由 `dotenv` 自动加载
+
+3. 构建并启动 PM2
+
+```bash
+pnpm deploy:pm2
+```
+
+或者拆开执行：
+
+```bash
+pnpm build
+pnpm pm2:start
+```
+
+#### 日常更新
+
+代码更新后执行：
+
+```bash
+git pull
+pnpm install
+pnpm deploy:pm2
+```
+
+这会重新构建，并通过 `pm2 startOrReload` 平滑重载服务。
+
+#### 常用 PM2 命令
+
+```bash
+pnpm pm2:start
+pnpm pm2:reload
+pnpm pm2:restart
+pnpm pm2:stop
+pnpm pm2:logs
+```
+
+也可以直接使用 PM2：
+
+```bash
+pm2 status
+pm2 logs ai-review-server
+pm2 restart ai-review-server
+```
+
+#### 日志路径
+
+PM2 默认会把日志写到：
+
+- `./logs/out.log`
+- `./logs/error.log`
+
+对应配置文件：
+
+- [`ecosystem.config.cjs`](./ecosystem.config.cjs)
+
+#### 配置文件说明
+
+项目已经内置 PM2 配置：
+
+- 进程名：`ai-review-server`
+- 启动入口：`dist/entry/index.js`
+- 运行模式：`fork`
+- 默认实例数：`1`
+- 自动重启：开启
+- 最大内存重启阈值：`1G`
+
+如果你需要修改端口，可以直接在启动前设置环境变量：
+
+```bash
+PORT=3100 pnpm deploy:pm2
+```
+
+#### 开机自启
+
+如果你希望服务器重启后自动恢复 PM2 进程：
+
+```bash
+pm2 startup
+pm2 save
+```
+
+执行 `pm2 startup` 后，按终端提示再执行一次它输出的那条命令即可。
 
 项目当前仓库自带的 GitLab CI/CD 流水线采用四段式结构：
 
@@ -682,8 +812,8 @@ flowchart LR
 
 如果你希望强制回滚到某个指定版本，也可以额外传入：
 
-| 变量 | 说明 |
-| --- | --- |
+| 变量                 | 说明                                                                    |
+| -------------------- | ----------------------------------------------------------------------- |
 | `ROLLBACK_IMAGE_TAG` | 可选。手动指定回滚到的镜像 tag，例如 `test-ab12cd34` 或 `prod-ab12cd34` |
 
 约束规则：
@@ -702,16 +832,16 @@ flowchart LR
 
 默认端口映射：
 
-- 测试环境：`3001 -> 3000`
-- 生产环境：`3000 -> 3000`
+- 测试环境：`3001 -> 9527`
+- 生产环境：`3000 -> 9527`
 
 镜像来源通过环境变量控制：
 
-| 变量 | 说明 |
-| --- | --- |
+| 变量                         | 说明             |
+| ---------------------------- | ---------------- |
 | `AI_REVIEW_IMAGE_REPOSITORY` | 应用镜像仓库地址 |
-| `AI_REVIEW_TEST_IMAGE_TAG` | 测试环境镜像 tag |
-| `AI_REVIEW_PROD_IMAGE_TAG` | 生产环境镜像 tag |
+| `AI_REVIEW_TEST_IMAGE_TAG`   | 测试环境镜像 tag |
+| `AI_REVIEW_PROD_IMAGE_TAG`   | 生产环境镜像 tag |
 
 ## 目录说明
 

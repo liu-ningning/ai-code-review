@@ -113,8 +113,8 @@ const start = async () => {
     await assertRuntimeDependencies();
     await reviewCoordinator.initialize();
 
-    // `PORT` 允许外部注入；未配置时默认监听 3000。
-    const port = Number(process.env.PORT) || 3000;
+    // `PORT` 允许外部注入；未配置时默认监听 9527
+    const port = Number(process.env.PORT) || 9527;
     await fastify.listen({ port, host: '0.0.0.0' });
 
     // 这里的告警更多是“运行后一定会拒绝请求”的早期提醒，

@@ -11,7 +11,7 @@ services:
     env_file:
       - .env.test
     ports:
-      - "3001:3000"
+      - "3001:9527"
     networks:
       - app-network
 
@@ -27,7 +27,7 @@ services:
     env_file:
       - .env.prod
     ports:
-      - "3000:3000"
+      - "3000:9527"
     networks:
       - app-network
 
