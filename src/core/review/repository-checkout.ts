@@ -29,12 +29,20 @@ export interface RepositoryCheckout {
  */
 export class RepositoryCheckoutManager {
   // 每个仓库一把逻辑锁，保证 mirror 刷新和 worktree 创建不会并发互踩。
+  // 这里不用更重的外部锁，是因为当前服务模型主要是单进程内并发；
+  // 对同仓库串行化已经能解决大多数“fetch 正在执行时另一个任务也在改 mirror”的问题。
   private static readonly lockTails = new Map<string, Promise<void>>();
   // mirror 最近一次成功 fetch 的新鲜度缓存。
+  // 这层缓存的目的不是保证绝对一致，而是减少短时间内重复 review 同一仓库时
+  // 不必要的远端 fetch，降低 SCM API 和 git 远端压力。
   private static readonly mirrorFreshnessCache = new LRUCache<string, number>({
     max: 64,
     ttl: DEFAULT_FETCH_TTL_MS,
   });
+  // 提交存在性缓存和 freshness 缓存分开维护：
+  // - freshness 解决“要不要 fetch”
+  // - commit presence 解决“某个 sha/ref 当前 mirror 里是否已经存在”
+  // 这样可以避免每次选 checkoutRef 都执行一次 rev-parse。
   private static readonly commitPresenceCache = new LRUCache<string, true>({
     max: 4096,
     ttl: DEFAULT_FETCH_TTL_MS,
@@ -51,6 +59,8 @@ export class RepositoryCheckoutManager {
     scmType: SCMType = config.SCM_TYPE
   ): Promise<RepositoryCheckout> {
     const repoKey = `${owner}/${repo}`;
+    // gitClient 按“本次请求实际选择的平台”构造，而不是读全局默认值。
+    // 这样同一个服务实例才能在 GitHub / GitLab 间按请求切换。
     const gitClient = this.createGitClient(scmType);
 
     return this.withRepoLock(repoKey, async () => {
@@ -80,6 +90,8 @@ export class RepositoryCheckoutManager {
       return {
         rootDir: checkoutDir,
         cleanup: async () => {
+          // worktree remove 失败不应阻断主流程结束；只记录警告并尽量清掉物理目录。
+          // 否则 review 已完成但因为临时目录回收失败导致整次任务报错，收益很低。
           try {
             await gitClient.removeWorktree(mirrorDir, checkoutDir);
           } catch (error: unknown) {
@@ -158,6 +170,8 @@ export class RepositoryCheckoutManager {
     const needsRefresh = await this.shouldRefreshMirror(mirrorDir);
     const hasHeadSha = headSha ? await this.hasCommit(gitClient, mirrorDir, headSha) : true;
 
+    // 只有在“缓存过旧”或“目标提交缺失”两类情况下才真的访问远端。
+    // 这能把大部分重复 review 压缩成纯本地路径。
     if (!needsRefresh && hasHeadSha) {
       return;
     }
@@ -172,6 +186,8 @@ export class RepositoryCheckoutManager {
     // refresh 之后，之前的 commit presence 判断可能已经过期，需要整体清掉。
     this.clearCommitPresenceEntries(mirrorDir);
 
+    // 某些场景下 origin fetch 后目标 sha 仍不在本地，例如 review 指向了一个非常新的提交
+    // 或远端分支引用还没完全覆盖该对象，此时再按 sha 显式补抓一次。
     if (headSha && !(await this.hasCommit(gitClient, mirrorDir, headSha))) {
       await gitClient.fetchRef(mirrorDir, 'origin', headSha);
       RepositoryCheckoutManager.mirrorFreshnessCache.set(mirrorDir, Date.now());
@@ -187,6 +203,8 @@ export class RepositoryCheckoutManager {
     }
 
     try {
+      // 对 bare mirror 来说，FETCH_HEAD 是否足够新鲜已经能很好地代表“近期是否 fetch 过”。
+      // 不需要每次都真的访问远端问一遍。
       const fetchHead = await stat(path.join(mirrorDir, 'FETCH_HEAD'));
       const isFresh = Date.now() - fetchHead.mtimeMs <= DEFAULT_FETCH_TTL_MS;
       if (isFresh) {
@@ -205,6 +223,10 @@ export class RepositoryCheckoutManager {
    * 优先精确 headSha 能避免分支指针在 review 执行期间继续移动造成的不确定性。
    */
   private async resolveCheckoutRef(gitClient: GitClient, mirrorDir: string, branch: string, headSha?: string): Promise<string> {
+    // checkoutRef 的选择优先级体现了“精确性优先”：
+    // 1. 优先 headSha，保证 review 对象稳定
+    // 2. 退化到远端分支引用
+    // 3. 再退化到裸 branch 名，让 git 自己解析
     if (headSha && await this.hasCommit(gitClient, mirrorDir, headSha)) {
       return headSha;
     }
@@ -260,6 +282,8 @@ export class RepositoryCheckoutManager {
       .map((segment) => encodeURIComponent(segment))
       .join('/');
 
+    // 这里统一基于 Web 根地址拼 `.git` 仓库 URL。
+    // GitHub / GitLab 在 HTTP clone 形式上兼容，因此不需要 provider 再分别拼装。
     const webBaseUrl = scmType === 'github'
       ? config.GITHUB_WEB_BASE_URL
       : config.GITLAB_BASE_URL;

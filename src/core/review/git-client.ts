@@ -17,6 +17,8 @@ const GIT_NOT_FOUND_MESSAGE =
  */
 export interface GitClientOptions {
   token?: string;
+  // 不同平台在 git over HTTP 的 Basic 用户名占位不同，
+  // 因此这里把 scmType 显式传入，而不是只传 token。
   scmType?: 'gitlab' | 'github';
 }
 
@@ -45,6 +47,8 @@ export class GitClient {
    * 以 mirror 模式克隆远端仓库，供后续反复复用。
    */
   async cloneMirror(repoUrl: string, targetDir: string): Promise<void> {
+    // mirror clone 会把对象库完整缓存下来，后续 review 只需做 fetch + worktree，
+    // 比每次重新 clone 一个普通仓库稳定得多，也更适合服务端长期运行。
     await this.run(['clone', '--mirror', repoUrl, targetDir]);
   }
 
@@ -66,6 +70,7 @@ export class GitClient {
    * 显式拉取某个 ref，通常用于补抓指定提交。
    */
   async fetchRef(gitDir: string, remoteName: string, ref: string): Promise<void> {
+    // 这里不做 ref 规范化，保留调用方传入的 sha / ref 原样，让 git 自己解析。
     await this.runForGitDir(gitDir, ['fetch', remoteName, ref]);
   }
 
@@ -92,6 +97,8 @@ export class GitClient {
       return true;
     } catch (error: unknown) {
       this.rethrowIfGitMissing(error);
+      // 这里故意把“提交不存在”视为普通 false，而不是异常；
+      // 上层 checkout 逻辑会基于这个布尔值决定是否需要补 fetch 或回退到其它 ref。
       return false;
     }
   }
@@ -135,6 +142,8 @@ export class GitClient {
       const { stdout } = await execFileAsync('git', [...authArgs, ...args], {
         env: {
           ...process.env,
+          // 服务端必须强制禁用交互 prompt，否则 token 失效时 git 会阻塞等待用户名/密码输入，
+          // 整个 review 任务会表现成“卡死”，而不是立刻得到可诊断的失败。
           GIT_TERMINAL_PROMPT: '0',
         },
         maxBuffer: 10 * 1024 * 1024,
@@ -158,6 +167,10 @@ export class GitClient {
       return [];
     }
 
+    // GitHub 和 GitLab 都接受 Basic 认证头，但用户名占位不一样：
+    // - GitHub 常用 x-access-token
+    // - GitLab 常用 oauth2
+    // 调用方只关心“这次走哪个平台”，不需要知道这些兼容细节。
     const username = this.options.scmType === 'github' ? 'x-access-token' : 'oauth2';
     const basicToken = Buffer.from(`${username}:${this.options.token}`, 'utf8').toString('base64');
     return ['-c', `http.extraHeader=Authorization: Basic ${basicToken}`];
@@ -169,6 +182,8 @@ export class GitClient {
    * 这样部署环境如果漏装 git，会直接抛出高可读错误，而不是系统底层异常。
    */
   private rethrowIfGitMissing(error: unknown): void {
+    // 这里只拦截“git 根本不存在”这种环境问题；其余错误继续原样抛给上层，
+    // 避免把认证失败、仓库不存在、网络错误等具体原因都吞掉。
     if (getErrorCode(error) === 'ENOENT') {
       throw new Error(GIT_NOT_FOUND_MESSAGE);
     }

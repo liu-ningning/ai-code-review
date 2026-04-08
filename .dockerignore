@@ -1,0 +1,14 @@
+.git
+.gitignore
+.DS_Store
+node_modules
+dist
+logs
+.env
+.env.*
+coverage
+.idea
+.vscode
+README.md
+docker-compose.yml
+tests

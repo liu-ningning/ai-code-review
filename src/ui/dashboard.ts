@@ -356,7 +356,7 @@ function buildCurl(form) {
   const token = escapeString(form.reviewToken).trim() || '<CI_REVIEW_TOKEN>';
   const streamSuffix = form.stream ? '?stream=1' : '';
   return [
-    "curl -X POST 'http://localhost:9527/ci/review" + streamSuffix + "'",
+    "curl -X POST 'http://127.0.0.1:9527/ci/review" + streamSuffix + "'",
     "  -H 'Content-Type: application/json'",
     "  -H 'X-Review-Token: " + token + "'",
     "  -d '" + JSON.stringify(payload, null, 2) + "'",

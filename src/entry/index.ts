@@ -128,7 +128,7 @@ const start = async () => {
     }
 
     logger.info(`SCM mode: ${config.SCM_TYPE}`);
-    logger.info(`AI Review Server is running at http://localhost:${port}`);
+    logger.info(`AI Review Server is running at http://127.0.0.1:${port}`);
   } catch (err) {
     // 启动失败时直接退出进程，让容器编排或进程管理器接管重启/告警。
     logger.error('❌ Failed to start server', err);

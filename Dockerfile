@@ -1,80 +1,62 @@
-ARG BASE_IMAGE=node:24-alpine
+# syntax=docker/dockerfile:1.7
+
+ARG NODE_VERSION=24-bookworm-slim
 ARG PNPM_VERSION=10.33.0
-ARG PNPM_FETCH_TIMEOUT=30000
-ARG PNPM_FETCH_RETRIES=1
-ARG PNPM_FETCH_RETRY_MINTIMEOUT=3000
-ARG PNPM_FETCH_RETRY_MAXTIMEOUT=10000
 
-FROM ${BASE_IMAGE} AS builder
+FROM node:${NODE_VERSION} AS base
 
-ARG PNPM_VERSION
-ARG PNPM_FETCH_TIMEOUT
-ARG PNPM_FETCH_RETRIES
-ARG PNPM_FETCH_RETRY_MINTIMEOUT
-ARG PNPM_FETCH_RETRY_MAXTIMEOUT
+ENV PNPM_HOME=/pnpm
+ENV PATH=${PNPM_HOME}:${PATH}
 
 WORKDIR /app
 
-ENV npm_config_fetch_timeout=${PNPM_FETCH_TIMEOUT} \
-    npm_config_fetch_retries=${PNPM_FETCH_RETRIES} \
-    npm_config_fetch_retry_mintimeout=${PNPM_FETCH_RETRY_MINTIMEOUT} \
-    npm_config_fetch_retry_maxtimeout=${PNPM_FETCH_RETRY_MAXTIMEOUT}
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git tini \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable \
+  && corepack prepare pnpm@${PNPM_VERSION} --activate
 
-# Ensure pnpm is available when building without a pre-baked base image
-RUN command -v pnpm >/dev/null 2>&1 || (corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate)
+FROM base AS prod-deps
 
-# Copy configuration files
-COPY package.json pnpm-lock.yaml tsconfig.json .npmrc ./
+COPY package.json pnpm-lock.yaml .npmrc ./
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+  pnpm install --prod --frozen-lockfile
 
-# Copy source code
+FROM base AS build
+
+COPY package.json pnpm-lock.yaml .npmrc tsconfig.json ./
+
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+  pnpm install --frozen-lockfile
+
 COPY src ./src
 
-# Build the project
 RUN pnpm build
 
-FROM ${BASE_IMAGE} AS runner
+FROM node:${NODE_VERSION} AS runner
 
-ARG PNPM_VERSION
-ARG PNPM_FETCH_TIMEOUT
-ARG PNPM_FETCH_RETRIES
-ARG PNPM_FETCH_RETRY_MINTIMEOUT
-ARG PNPM_FETCH_RETRY_MAXTIMEOUT
+ENV NODE_ENV=production
+ENV PORT=9527
 
 WORKDIR /app
-ENV NODE_ENV=production
-ENV npm_config_fetch_timeout=${PNPM_FETCH_TIMEOUT} \
-    npm_config_fetch_retries=${PNPM_FETCH_RETRIES} \
-    npm_config_fetch_retry_mintimeout=${PNPM_FETCH_RETRY_MINTIMEOUT} \
-    npm_config_fetch_retry_maxtimeout=${PNPM_FETCH_RETRY_MAXTIMEOUT}
 
-# Ensure runtime dependencies are available when building without a pre-baked base image
-RUN command -v git >/dev/null 2>&1 || ( \
-  if command -v apk >/dev/null 2>&1; then \
-    apk add --no-cache git; \
-  elif command -v apt-get >/dev/null 2>&1; then \
-    apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*; \
-  else \
-    echo "No supported package manager found to install git" >&2; \
-    exit 1; \
-  fi \
-)
-RUN command -v pnpm >/dev/null 2>&1 || (corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git tini \
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /app \
+  && chown -R node:node /app
 
-# Copy dependency manifests first so production install can stay cached
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
-COPY --from=builder /app/.npmrc ./.npmrc
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/package.json ./package.json
 
-# Install production dependencies only
-RUN pnpm install --prod --frozen-lockfile
+USER node
 
-# Copy build artifacts after dependencies to avoid invalidating the install layer
-COPY --from=builder /app/dist ./dist
+EXPOSE 9527
 
-EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 9527) + '/healthz').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"
 
-# Set the entry point
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "dist/entry/index.js"]

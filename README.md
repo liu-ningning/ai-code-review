@@ -193,7 +193,6 @@ pnpm run build:start
 1. 在 GitHub 创建 Personal Access Token，并确认它能访问目标仓库
 
    创建步骤：
-
    - 打开 GitHub 右上角头像
    - 进入 `Settings`
    - 进入 `Developer settings`
@@ -208,6 +207,7 @@ pnpm run build:start
      - `Metadata: Read`
 
    创建完成后，复制 token 并保存。GitHub 只会展示一次原始值。
+
 2. 在 `.env` 中配置：
 
 ```env
@@ -233,7 +233,7 @@ pnpm run build:start
 示例：
 
 ```bash
-curl -X POST 'http://localhost:9527/ci/review?stream=1' \
+curl -X POST 'http://127.0.0.1:9527/ci/review?stream=1' \
   -H 'Content-Type: application/json' \
   -H 'X-Review-Token: your_ci_review_token' \
   -d '{
@@ -249,7 +249,6 @@ curl -X POST 'http://localhost:9527/ci/review?stream=1' \
 1. 在 GitLab 或私有 GitLab 实例创建 Personal Access Token
 
    创建步骤：
-
    - 登录你的 GitLab 或私有 GitLab 实例
    - 点击右上角头像
    - 进入 `Preferences` 或 `Edit profile`
@@ -258,7 +257,6 @@ curl -X POST 'http://localhost:9527/ci/review?stream=1' \
    - 推荐直接授予 `api` 权限
 
    如果你们的 GitLab 实例权限拆得更细，至少要保证 token 能：
-
    - 读取项目
    - 读取 Merge Request
    - 读取仓库内容和 diff
@@ -266,6 +264,7 @@ curl -X POST 'http://localhost:9527/ci/review?stream=1' \
    - 更新 commit status
 
    创建完成后，复制 token 并保存。GitLab 也通常只会展示一次原始值。
+
 2. 在 `.env` 中配置：
 
 ```env
@@ -297,7 +296,7 @@ pnpm run build:start
 示例：
 
 ```bash
-curl -X POST 'http://localhost:9527/ci/review?stream=1' \
+curl -X POST 'http://127.0.0.1:9527/ci/review?stream=1' \
   -H 'Content-Type: application/json' \
   -H 'X-Review-Token: your_ci_review_token' \
   -d '{
@@ -329,7 +328,7 @@ curl -X POST 'http://localhost:9527/ci/review?stream=1' \
 
 启动后访问：
 
-- [http://localhost:9527/](http://localhost:9527/)
+- [http://127.0.0.1:9527/](http://127.0.0.1:9527/)
 
 页面支持：
 
@@ -378,7 +377,7 @@ Authorization: Bearer <CI_REVIEW_TOKEN>
 #### GitHub PR 示例
 
 ```bash
-curl -X POST 'http://localhost:9527/ci/review?stream=1' \
+curl -X POST 'http://127.0.0.1:9527/ci/review?stream=1' \
   -H 'Content-Type: application/json' \
   -H 'X-Review-Token: your-token' \
   -d '{
@@ -392,7 +391,7 @@ curl -X POST 'http://localhost:9527/ci/review?stream=1' \
 #### GitLab MR 示例
 
 ```bash
-curl -X POST 'http://localhost:9527/ci/review?stream=1' \
+curl -X POST 'http://127.0.0.1:9527/ci/review?stream=1' \
   -H 'Content-Type: application/json' \
   -H 'X-Review-Token: your-token' \
   -d '{
@@ -406,7 +405,7 @@ curl -X POST 'http://localhost:9527/ci/review?stream=1' \
 #### Commit review 示例
 
 ```bash
-curl -X POST 'http://localhost:9527/ci/review' \
+curl -X POST 'http://127.0.0.1:9527/ci/review' \
   -H 'Content-Type: application/json' \
   -H 'X-Review-Token: your-token' \
   -d '{
@@ -436,7 +435,7 @@ curl -X POST 'http://localhost:9527/ci/review' \
 示例：
 
 ```bash
-curl -N -X POST 'http://localhost:9527/ci/review?stream=1' \
+curl -N -X POST 'http://127.0.0.1:9527/ci/review?stream=1' \
   -H 'Content-Type: application/json' \
   -H 'X-Review-Token: your-token' \
   -H 'Accept: application/x-ndjson' \
@@ -605,7 +604,6 @@ pnpm test:typecheck
 1. 在 GitHub 创建 Personal Access Token
 
    推荐步骤：
-
    - 打开 GitHub `Settings`
    - 进入 `Developer settings`
    - 进入 `Personal access tokens`
@@ -616,6 +614,7 @@ pnpm test:typecheck
      - `Contents: Read`
      - `Commit statuses: Read and write`
      - `Metadata: Read`
+
 2. 确保 token 对目标仓库有访问权限
 3. 在 `.env` 中配置：
 
@@ -650,7 +649,6 @@ CI_REVIEW_TOKEN=your_ci_review_token
 1. 在 GitLab 或私有 GitLab 实例创建 Personal Access Token
 
    推荐步骤：
-
    - 登录你的 GitLab 实例
    - 打开头像菜单
    - 进入 `Preferences`
@@ -659,6 +657,7 @@ CI_REVIEW_TOKEN=your_ci_review_token
    - 优先直接授予 `api` 权限
 
    如果不是标准 GitLab 页面路径，按你们实例的用户设置页面找到 `Access Tokens` 即可。
+
 2. 确保 token 有读取项目、读取 MR、读取仓库、发评论和写状态的权限
 3. 在 `.env` 中配置：
 

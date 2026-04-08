@@ -5,7 +5,6 @@
   - pnpm-lock.yaml
   - tsconfig.json
   - Dockerfile
-  - Dockerfile.base
   - docker-compose.yml
   - .gitlab/**/*
   - .gitlab-ci.yml
@@ -18,6 +17,8 @@
 .deploy_template:
   stage: deploy
   timeout: 40m
+  before_script:
+    - sh ./.gitlab/cd/setup-runner-ssh.sh
   script:
     - sh ./.gitlab/cd/deploy.sh
 
@@ -27,6 +28,8 @@
   timeout: 40m
   when: manual
   allow_failure: true
+  before_script:
+    - sh ./.gitlab/cd/setup-runner-ssh.sh
   script:
     - sh ./.gitlab/cd/rollback.sh
 

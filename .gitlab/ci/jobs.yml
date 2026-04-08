@@ -1,9 +1,3 @@
-# 基础镜像构建相关的变更范围。
-.base_image_changes: &base_image_changes
-  - Dockerfile.base
-  - .gitlab/ci/**/*
-  - .gitlab-ci.yml
-
 # 业务镜像构建相关的变更范围。
 .app_image_changes: &app_image_changes
   - src/**/*
@@ -11,23 +5,62 @@
   - pnpm-lock.yaml
   - tsconfig.json
   - Dockerfile
-  - Dockerfile.base
   - docker-compose.yml
   - .gitlab/**/*
   - .gitlab-ci.yml
 
-# 基础镜像构建任务。
-build:base-image:
-  stage: prepare
-  interruptible: true
-  before_script: []
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
-      changes: *base_image_changes
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
-      changes: *base_image_changes
+# 代码校验相关的变更范围。
+.validate_changes: &validate_changes
+  - src/**/*
+  - tests/**/*
+  - package.json
+  - pnpm-lock.yaml
+  - tsconfig.json
+  - eslint.config.js
+  - .gitlab/**/*
+  - .gitlab-ci.yml
+
+# Node 类校验任务共用模板。
+.validate_template:
+  stage: validate
+  image: node:24-bookworm-slim
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@${PNPM_VERSION} --activate
+    - pnpm install --frozen-lockfile
+
+# Lint 任务。
+lint:
+  extends: .validate_template
   script:
-    - sh ./.gitlab/ci/build-base-image.sh
+    - pnpm lint
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *validate_changes
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main")'
+      changes: *validate_changes
+
+# 测试任务。
+test:
+  extends: .validate_template
+  script:
+    - pnpm test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *validate_changes
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main")'
+      changes: *validate_changes
+
+# 构建校验任务，确保 TypeScript 产物在进镜像前可生成。
+build:check:
+  extends: .validate_template
+  script:
+    - pnpm build
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *validate_changes
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main")'
+      changes: *validate_changes
 
 # 业务镜像构建模板。
 .build_app_template:
@@ -40,6 +73,7 @@ build:base-image:
 # 测试环境业务镜像构建任务。
 build:app:test:
   extends: .build_app_template
+  needs: ["lint", "test", "build:check"]
   variables:
     IMAGE_TAG_STABLE: test
     IMAGE_TAG_VERSION: test-${CI_COMMIT_SHORT_SHA}
@@ -50,6 +84,7 @@ build:app:test:
 # 生产环境业务镜像构建任务。
 build:app:prod:
   extends: .build_app_template
+  needs: ["lint", "test", "build:check"]
   interruptible: false
   variables:
     IMAGE_TAG_STABLE: prod
