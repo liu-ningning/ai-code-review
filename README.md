@@ -186,6 +186,24 @@ pnpm run build:start
 
 默认端口是 `9527`。
 
+### Dashboard 界面展示
+
+**首页 - 选择 SCM 平台**
+
+![Dashboard 首页](public/home1.png)
+
+**Review 执行事件流**
+
+![Review 配置](public/home2.png)
+
+**多 Agent 执行状态**
+
+![执行进度](public/home3.png)
+
+**gitLab/gitHub中 Review 结果展示**
+
+![Review 结果](public/result.png)
+
 ## 接入流程
 
 ### GitHub 接入流程
