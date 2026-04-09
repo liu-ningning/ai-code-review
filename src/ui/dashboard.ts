@@ -263,6 +263,7 @@ const DEFAULT_FORM = {
   scmType: 'github',
   projectPath: '',
   reviewToken: '',
+  feishuWebhookUrl: '',
   stream: true,
   mergeRequestIid: undefined,
 };
@@ -339,6 +340,7 @@ function buildPayload(form) {
     scmType: escapeString(form.scmType).trim() || 'github',
     kind: 'merge_request',
     projectPath: escapeString(form.projectPath).trim(),
+    feishuWebhookUrl: escapeString(form.feishuWebhookUrl).trim(),
     mergeRequestIid: Number(form.mergeRequestIid),
   };
 
@@ -688,7 +690,12 @@ function DashboardApp() {
         tokenUsageTotal: payload.tokenUsageTotal ?? 0,
         rawResult: JSON.stringify(payload, null, 2),
         findings: Array.isArray(payload.findings) ? payload.findings : [],
-        events: appendEvent(current.events, 'result', payload.message || '评审完成', tone),
+        events: appendEvent(
+          current.events,
+          'result',
+          payload.message || (formState.feishuWebhookUrl ? '评审完成，已尝试发送飞书通知' : '评审完成'),
+          tone
+        ),
         agents: nextAgents,
       };
     });
@@ -941,6 +948,11 @@ function DashboardApp() {
             value: formState.reviewToken,
             placeholder: 'CI_REVIEW_TOKEN',
             onChange: (event) => setField('reviewToken', event.target.value),
+          })),
+          h(Form.Item, { key: 'feishu-webhook', label: '飞书机器人 Webhook（可选）' }, h(Input, {
+            value: formState.feishuWebhookUrl,
+            placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxx',
+            onChange: (event) => setField('feishuWebhookUrl', event.target.value),
           })),
           h(Form.Item, { key: 'stream-switch', label: '流式返回' }, h(Card, {
             size: 'small',

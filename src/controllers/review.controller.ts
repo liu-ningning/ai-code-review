@@ -10,6 +10,7 @@ import { PassThrough } from 'node:stream';
 import { config } from '../config/index.js';
 import { ReviewCoordinator } from '../core/pipeline/review-coordinator.js';
 import { ReviewPipeline } from '../core/pipeline/review-pipeline.js';
+import { notifyFeishuReviewFailure, notifyFeishuReviewResult } from '../shared/feishu-notifier.js';
 import { logger } from '../shared/logger.js';
 import { ISCMProvider, ReviewProgressEvent, ReviewRunResult, ReviewTarget, SCMType } from '../types/index.js';
 import { dashboardScript, dashboardStyles, renderDashboardPage } from '../ui/dashboard.js';
@@ -203,6 +204,7 @@ export function registerReviewController(
       baseSha?: string;
       branch?: string;
       description?: string;
+      feishuWebhookUrl?: string;
       headSha?: string;
       htmlUrl?: string;
       mergeRequestIid?: number | string;
@@ -210,6 +212,7 @@ export function registerReviewController(
       title?: string;
     };
     const requestedScmType = resolveRequestedScmType(body.scmType);
+    const feishuWebhookUrl = typeof body.feishuWebhookUrl === 'string' ? body.feishuWebhookUrl.trim() : '';
 
     // 每次请求按显式 scmType 决定走哪种平台，而不是绑定进程级默认值。
     if (requestedScmType === 'gitlab' && !config.GITLAB_TOKEN) {
@@ -324,11 +327,25 @@ export function registerReviewController(
           buildCiReviewExecutionKey(target),
           () => pipeline.run(target)
         );
+        await tryNotifyFeishuReviewResult(result, {
+          requestId,
+          projectPath: body.projectPath,
+          scmType: requestedScmType,
+          webhookUrl: feishuWebhookUrl,
+        });
         const responsePayload = buildReviewResponsePayload(result, requestId);
         const statusCode = resolveReviewHttpStatus(result);
 
         writeNdjsonLine(stream, buildResultEvent(statusCode, responsePayload));
       } catch (error: unknown) {
+        await tryNotifyFeishuReviewFailure(error, {
+          requestId,
+          projectPath: body.projectPath,
+          scmType: requestedScmType,
+          webhookUrl: feishuWebhookUrl,
+          reviewKind: target.kind,
+          reviewDisplay: buildReviewDisplay(target),
+        });
         // 流式模式下错误也要通过统一事件返回，避免调用方只能看到连接中断。
         writeNdjsonLine(stream, buildErrorEvent(requestId, error));
       } finally {
@@ -345,6 +362,12 @@ export function registerReviewController(
       buildCiReviewExecutionKey(target),
       () => pipeline.run(target)
     );
+    await tryNotifyFeishuReviewResult(result, {
+      requestId,
+      projectPath: body.projectPath,
+      scmType: requestedScmType,
+      webhookUrl: feishuWebhookUrl,
+    });
     const responsePayload = buildReviewResponsePayload(result, requestId);
     const statusCode = resolveReviewHttpStatus(result);
 
@@ -482,6 +505,58 @@ function buildFindingPreview(comments: Array<{ path: string; line: number; body:
     const firstLine = comment.body.split('\n')[0]?.trim() || 'AI review finding';
     return `${comment.path}:${comment.line} ${firstLine}`;
   });
+}
+
+async function tryNotifyFeishuReviewResult(
+  result: ReviewRunResult,
+  options: {
+    requestId: string;
+    projectPath: string;
+    scmType: SCMType;
+    webhookUrl?: string;
+  }
+): Promise<void> {
+  try {
+    await notifyFeishuReviewResult(result, options);
+  } catch (error: unknown) {
+    logger.warn('⚠️ Failed to send Feishu review notification', {
+      requestId: options.requestId,
+      projectPath: options.projectPath,
+      scmType: options.scmType,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function tryNotifyFeishuReviewFailure(
+  error: unknown,
+  options: {
+    requestId: string;
+    projectPath: string;
+    scmType: SCMType;
+    webhookUrl?: string;
+    reviewKind: 'commit' | 'merge_request';
+    reviewDisplay: string;
+  }
+): Promise<void> {
+  try {
+    await notifyFeishuReviewFailure(error instanceof Error ? error.message : String(error), options);
+  } catch (notifyError: unknown) {
+    logger.warn('⚠️ Failed to send Feishu failure notification', {
+      requestId: options.requestId,
+      projectPath: options.projectPath,
+      scmType: options.scmType,
+      error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+    });
+  }
+}
+
+function buildReviewDisplay(target: ReviewTarget): string {
+  if (target.kind === 'merge_request') {
+    return `MR/PR #${target.number}`;
+  }
+
+  return `${target.branch}@${target.headSha.slice(0, 8)}`;
 }
 
 /**
